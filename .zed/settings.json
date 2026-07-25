@@ -1,0 +1,8 @@
+{
+  "load_direnv": "direct",
+  "languages": {
+    "Python": {
+      "language_servers": ["pyright", "ruff", "!basedpyright"]
+    }
+  }
+}

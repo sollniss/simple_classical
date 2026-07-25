@@ -1,0 +1,23 @@
+uuid = "05bd3b28-ab1d-4b3d-a752-4ef81d3319f5"
+name = "Simple Classical"
+description = "Lightweight classical-music tagging with a simple, customizable mapping interface."
+api = ["3.0"]
+version = "0.2.0"
+authors = ["sollniss"]
+license = "GPL-2.0-or-later"
+license_url = "https://www.gnu.org/licenses/gpl-2.0.html"
+categories = ["metadata"]
+long_description = """
+For every kind of data (title, artist, album artist, artists, composer,
+conductor, orchestra, recording location, work/movement hierarchy, key,
+composition year, recording date) you choose which tags it is written to - separately for
+canonical and as-credited names where both exist. Empty tag lists write
+nothing. The work hierarchy is rendered through small templates (%L1%,
+%top%, %top..L1{:: }%) with optional per-depth overrides, and all hierarchy
+levels are exported as %_sc_...% variables for Picard scripting. Each section
+can replace, append, merge or preserve existing tags, with destination presets
+for portable, Picard-native, Roon and MPD tagging.
+
+Requires "Use track and release relationships" to be enabled in
+Options > Metadata.
+"""
