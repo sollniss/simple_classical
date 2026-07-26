@@ -710,8 +710,13 @@ def _locations_response(
         for recording in recordings:
             places = _rel_entries(recording, "place", "recorded at")
             areas = _rel_entries(recording, "area", "recorded in")
-            if places or areas:
-                collected[recording["id"]] = {"place": places, "area": areas}
+            dates = _recording_date_span(recording)
+            if places or areas or dates != (None, None):
+                collected[recording["id"]] = {
+                    "place": places,
+                    "area": areas,
+                    "dates": dates,
+                }
         next_offset = offset + len(recordings)
         if not error and recordings and next_offset < total:
             _request_locations(api, album, release_id, next_offset, collected)
@@ -828,9 +833,11 @@ def _preview_sections(setting, release, track, get_work):
 
     pending = []
     sections["work"] = None
-    sections["recordingdate"] = None
+    begin, end = _best_span(
+        _performance_span(performance), _recording_date_span(recording)
+    )
+    sections["recordingdate"] = _date_value(setting, begin, end)
     if performance and work:
-        sections["recordingdate"] = _recording_date_value(setting, performance)
         parent = _parent_rel(work)
         chain, missing = [], None
         work_id = parent["work"]["id"] if parent else work["id"]
@@ -925,18 +932,39 @@ def process_track(api, track, metadata, track_node, release_node=None):
         _rel_entries(recording, "artist", "performing orchestra"),
     )
 
-    if (
-        setting["location_enabled"]
-        and release_node is not None
-        and recording.get("id")
-        and release_node.get("id")
-    ):
+    # release id for the locations browse; None when browsing is not possible
+    browse_id = None
+    if release_node is not None and recording.get("id"):
+        browse_id = release_node.get("id")
+
+    if setting["location_enabled"] and browse_id:
         _fetch_locations(
             api,
             album,
-            release_node["id"],
+            browse_id,
             partial(_apply_location, setting, metadata, recording["id"]),
         )
+
+    if setting["recdate_enabled"]:
+        # a less-than-day-precise performance span may be beaten by dates on
+        # the 'recorded at'/'recorded in' relationships, which only the
+        # locations browse carries
+        span = _performance_span(performance)
+        if _span_score(*span) >= _FULL_SPAN_SCORE or not browse_id:
+            _write_recording_date(setting, metadata, _date_value(setting, *span))
+        else:
+            _fetch_locations(
+                api,
+                album,
+                browse_id,
+                partial(
+                    _apply_recording_date_browsed,
+                    setting,
+                    metadata,
+                    recording["id"],
+                    span,
+                ),
+            )
 
     if not performance or not work:
         return
@@ -944,9 +972,6 @@ def process_track(api, track, metadata, track_node, release_node=None):
     _apply_people(
         setting, metadata, "composer", _rel_entries(work, "artist", "composer")
     )
-
-    if setting["recdate_enabled"]:
-        _apply_recording_date(setting, metadata, performance)
 
     if not (
         setting["work_enabled"] or setting["key_enabled"] or setting["workyear_enabled"]
@@ -1073,8 +1098,7 @@ def _finish_work(api, metadata, work, performance, parent, numbering, chain):
             )
 
 
-def _recording_date_value(setting, performance):
-    begin, end = performance.get("begin"), performance.get("end")
+def _date_value(setting, begin, end):
     mode = setting["recording_date_mode"]
     if mode == "begin":
         return begin or end
@@ -1083,8 +1107,51 @@ def _recording_date_value(setting, performance):
     return end or begin  # "end"
 
 
-def _apply_recording_date(setting, metadata, performance):
-    value = _recording_date_value(setting, performance)
+def _span_score(begin, end):
+    """Precision/completeness of a date span: day-precise endpoints score
+    higher than month- or year-only ones, and two endpoints beat one."""
+    return len(begin or "") + len(end or "")
+
+
+# both endpoints day-precise ('YYYY-MM-DD'): no other span can score higher
+_FULL_SPAN_SCORE = 20
+
+
+def _performance_span(performance):
+    if not performance:
+        return (None, None)
+    return (performance.get("begin"), performance.get("end"))
+
+
+def _best_span(performance_span, place_span):
+    """The more precise of the two spans; the performance relationship (the
+    canonical recording date) wins ties."""
+    if _span_score(*place_span) > _span_score(*performance_span):
+        return place_span
+    return performance_span
+
+
+def _recording_date_span(recording):
+    """(begin, end) from the recording's 'recorded at'/'recorded in'
+    relationship dates.
+
+    Session dates are often entered on the place relationship rather than
+    the performance relationship.  Several dated relationships span from
+    the earliest begin to the latest end."""
+    for target, reltype in (("place", "recorded at"), ("area", "recorded in")):
+        rels = [
+            rel
+            for rel in _work_rels(recording, reltype, target=target)
+            if rel.get("begin") or rel.get("end")
+        ]
+        if rels:
+            begins = sorted(rel["begin"] for rel in rels if rel.get("begin"))
+            ends = sorted(rel["end"] for rel in rels if rel.get("end"))
+            return (begins[0] if begins else None, ends[-1] if ends else None)
+    return (None, None)
+
+
+def _write_recording_date(setting, metadata, value):
     if value:
         _write_tags(
             metadata,
@@ -1092,6 +1159,12 @@ def _apply_recording_date(setting, metadata, performance):
             value,
             setting["recdate_write_policy"],
         )
+
+
+def _apply_recording_date_browsed(setting, metadata, recording_id, span, locations):
+    place_span = (locations.get(recording_id) or {}).get("dates") or (None, None)
+    begin, end = _best_span(span, place_span)
+    _write_recording_date(setting, metadata, _date_value(setting, begin, end))
 
 
 # ---------------------------------------------------------------------------
@@ -1521,6 +1594,15 @@ class SimpleClassicalOptionsPage(OptionsPage):
 
     def _add_recdate_box(self):
         form = self._add_box("recdate_enabled", "Recording date")
+        self._note_row(
+            form,
+            "From the performance relationship's dates or the “recorded "
+            "at”/“recorded in” relationship dates, whichever is more "
+            "precise (the performance relationship wins ties). Checking "
+            "the place dates needs one extra MusicBrainz request per album "
+            "(shared with the recording location section), skipped when "
+            "the performance dates are already day-precise.",
+        )
         self._mode_row(form, "Existing tags:", "recdate_write_policy", _WRITE_POLICIES)
         self._text_row(form, "Write to:", "tag_recordingdate")
         self._mode_row(form, "Date style:", "recording_date_mode", _DATE_MODES)

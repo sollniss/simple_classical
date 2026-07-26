@@ -122,8 +122,12 @@ The individual sections are:
     venues. Picard's release data does not include place relationships,
     so the plugin loads them with one extra MusicBrainz request per album
     (per 100 recordings).
-- **Recording date** — from the performance relationship's session dates;
-  first day, last day (default) or the full range.
+- **Recording date** — session dates from the performance relationship or
+  the "recorded at"/"recorded in" relationships, whichever span is more
+  precise (the performance relationship wins ties); first day, last day
+  (default) or the full range. The place dates are loaded with the same
+  extra request the recording location section uses, skipped when the
+  performance dates are already day-precise.
 - **Work & movement** — see below.
 - **Key** — the work's "Key" attribute (nearest level that has one).
 - **Composition year** — from the composer relationship dates
