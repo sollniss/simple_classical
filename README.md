@@ -172,28 +172,98 @@ the templates can't express is one `$set()` away in Options → Scripting.
   works that are themselves arrangements are ignored.
 - Tag names starting with `_` are written as hidden Picard variables.
 
-## Known bugs
+## Relationship to Classical Extras
 
-### Combo boxes and menus "flicker" (open and immediately close) on COSMIC
+[Classical Extras](https://github.com/MetaTunes/picard-plugins/tree/metabrainz/2.0/plugins/classical_extras)
+by Mark Evens has long been _the_ comprehensive classical tagging plugin
+for Picard 2.x, and it does far more than this plugin ever intends to.
+Simple Classical shares no code with it and is not a port, but it covers
+some of the same ground, so here is how the two relate. If a Classical
+Extras feature is listed below as not covered, that is most likely a deliberate
+scope decision, not an oversight.
 
-After loading a preview release, dropdowns and menus across all of Picard
-may start closing the moment they open, until the affected windows are
-closed and reopened (or Picard is restarted).
+### General approach
 
-This is a [cosmic-comp](https://github.com/pop-os/cosmic-comp) popup-handling bug,
-not a plugin bug. The compositor loses track of popup surfaces (it logs
-`surface missing from known popups`), and the broken popup state then
-affects the whole application. It occurs on COSMIC without this plugin
-too; the preview merely triggers it reliably. The plugin mitigates it by
-deferring preview updates while any popup, menu or tooltip is open and by
-never relayouting the page when nothing changed, but it cannot fix the
-compositor. Related upstream issues:
-[cosmic-comp#1815](https://github.com/pop-os/cosmic-comp/issues/1815),
-[cosmic-comp#2064](https://github.com/pop-os/cosmic-comp/issues/2064),
-[cosmic-epoch#1577](https://github.com/pop-os/cosmic-epoch/issues/1577).
-Workaround: run Picard on XWayland, where the problem does not occur:
+Classical Extras computes a large set of hidden variables (`_cwp_*`
+for the work hierarchy, `_cea_*` for artists) and leaves it to you to
+route them into real tags, either through its tag-mapping table or your own
+tagger scripts. Everything the plugin knows is exposed, which makes it
+extremely flexible, at the price of a five-tab options page and some
+scripting for custom output.
 
-    QT_QPA_PLATFORM=xcb picard
+Simple Classical turns that model around: each kind of fact is a section
+that writes destination tags directly, configured as a tag-name list
+plus (for the work hierarchy) a small template. The `%_sc_...%` script
+variables are an escape hatch for when the UI is not enough. The trade-off
+is less exposed data in exchange for a setup that is one options page,
+a live preview and no scripting.
+
+Other differences in approach:
+
+- **Picard version**: Classical Extras supports Picard 2.0–2.7 (PyQt5)
+  and has no Picard 3 port at the time of writing; this plugin targets
+  Picard 3 only.
+- Both require **"Use track and release relationships"**; Classical
+  Extras enables the options itself, this plugin only warns in the log.
+- Both need **extra MusicBrainz lookups** to climb the work hierarchy
+  and cache the results. Classical Extras additionally offers a
+  persistent cross-session cache; this plugin caches per album and adds
+  one browse request per album (per 100 recordings) for the
+  place/date data.
+- **Options** here are one global config plus per-player presets;
+  Classical Extras can save its entire option set into tags per album
+  (or track) and re-apply it later.
+- For checking results, this plugin offers a **live preview** on the
+  options page; Classical Extras instead offers per-release log files
+  and custom columns in Picard's file pane.
+
+### Shared functionality
+
+| Functionality                               | Simple Classical                                                                    | Classical Extras                                                                                             | Compatibility                                                                                                                                                                            |
+| ------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work/movement from the MB work hierarchy    | Templates (`%L1%`, `%top%`, ranges), up to 4 levels, per-depth overrides            | Unlimited levels; three naming styles: MB canonical, track-title text, or canonical enhanced with title text | Both default to a `::`-separated multi-level work value; names differ where Classical Extras' default "extended" style appends `{title text}`                                            |
+| Movement titles relative to the parent work | Strips the parent title and leading punctuation                                     | Also strips repeated text elsewhere in the title, with similarity thresholds and synonym lists               | Same result on well-formed MB titles; Classical Extras cleans up inconsistent data more aggressively                                                                                     |
+| Movement numbering                          | Counts tracks within the parent work per disc; split movements numbered separately  | Same semantics, with additional rules for interleaved works                                                  | Both write `movement`, `movementnumber`, `movementtotal` by default                                                                                                                      |
+| Partial performances                        | Suffix on the movement, default `: (part)`                                          | Notional sub-part with suffix, default ` (part)`                                                             | Same concept, slightly different default text                                                                                                                                            |
+| Apple Music work display                    | `showmovement` = 1                                                                  | "show work movement" = 1                                                                                     | Same                                                                                                                                                                                     |
+| Composer, conductor, orchestra              | Dedicated sections; canonical, as-credited and sort names; multi-value split option | Part of a wider artist engine with per-context credited-as, aliases and ensemble detection by name lists     | Default `composer`/`composersort`/`conductor` tags line up; for the orchestra this plugin writes `ensemble`/`performer:orchestra` by default, Classical Extras leaves the mapping to you |
+| Artist / album artist adjustment            | Per-role keep/remove/add rules applied to the release credit                        | Recording-artist replace/merge options; can prefix the _album title_ with composer last names                | Different mechanisms, compare output before assuming parity                                                                                                                              |
+| Key                                         | The work's Key attribute, nearest level that has one                                | Keys from all levels, optionally embedded into work names                                                    | Equivalent for the common single-key case                                                                                                                                                |
+| Composition dates                           | Composer-relationship span, e.g. `1822-1824` + suffix                               | Composed/published/premiered dates, plus period names derived from a period map                              | This plugin covers the "composed dates" subset                                                                                                                                           |
+| Arrangements                                | A recording linked to both an original and an arrangement resolves to the original  | The arranged work becomes a pseudo-parent; arrangement names get a prefix                                    | Different philosophy: pick one work vs. represent the relationship                                                                                                                       |
+| Existing-tag handling                       | Per-section policy: replace, append, merge, or only-if-empty                        | Tag map appends, per-line "Conditional?" writes only if blank; can preserve pre-existing file tags           | Similar capability                                                                                                                                                                       |
+| Script variables                            | `%_sc_l1%`…, `%_sc_top%`, `%_sc_depth%`, `%_sc_partial%`                            | The full `_cwp_*`/`_cea_*` set (dozens of variables)                                                         | Scripts are **not** portable: names differ and this plugin exports far less                                                                                                              |
+
+### Only in Simple Classical
+
+- Recording date (session dates from the performance or place
+  relationships, picking the more precise span; first/last/range).
+- Recording location/venue (`location` from the "recorded at" place,
+  optional area fallback).
+- Live preview of every section's output on the options page.
+- One-click destination presets for portable, Picard-native, Roon and
+  MPD tag naming.
+- Runs on Picard 3.
+
+### Only in Classical Extras
+
+- Extra artist roles: arrangers (including instrument/vocal arrangers),
+  orchestrators, lyricists, librettists, translators, chorus masters,
+  concertmasters, reconstructors, revisors — each with sort names.
+- Performer classification: soloists vs. ensembles, vocalists and
+  instrumentalists, album-artist cross-references (album soloists,
+  support performers, …).
+- Work and artist aliases, per-context as-credited names, non-Latin
+  script handling.
+- Work names built or enhanced from track-title text, including
+  synonym/replacement/similarity text processing.
+- Genres, work types, classical-or-not detection, periods, and Muso /
+  SongKong integration.
+- Instrument tags from the performer relationships.
+- Medleys.
+- Splitting a file's lyrics tag into album and track notes.
+- Free-form tag mapping with constants and concatenation, custom file
+  pane columns, per-release debug logs.
 
 ## Development environment
 
