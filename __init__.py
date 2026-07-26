@@ -43,6 +43,26 @@ SECTION_DEFAULTS = {
     "location": (True, "location", "", "", True),
 }
 
+# Classical-or-not detection: signals computed once per release, combined
+# by user-defined rules.  A release is classical if any rule matches; a
+# rule matches when all its 'require' signals hold and none of its
+# 'exclude' signals does.
+_CLASSICAL_SIGNALS = (
+    "composer",
+    "conductor_orchestra",
+    "composer_in_credit",
+    "genre",
+    "multi_movement",
+)
+
+_DEFAULT_CLASSICAL_RULES = json.dumps(
+    [
+        {"composer": "require", "conductor_orchestra": "require"},
+        {"composer": "require", "composer_in_credit": "require"},
+        {"genre": "require"},
+    ]
+)
+
 _EXTRA_DEFAULTS = [
     # artist / album artist role rules: keep|remove|add per role
     ("artist_role_composer", "remove"),
@@ -54,6 +74,15 @@ _EXTRA_DEFAULTS = [
     # recording location: 'recorded in' areas are often just a city or
     # country, so the fallback is opt-in
     ("location_area_fallback", False),
+    # classical detection; the gate is off by default (tag every release)
+    ("classical_enabled", False),
+    ("classical_rules", _DEFAULT_CLASSICAL_RULES),
+    (
+        "classical_genres",
+        "classical; opera; operetta; ballet; baroque; chamber music; choral; "
+        "early music; medieval; renaissance; romanticism; impressionism; "
+        "modern classical; contemporary classical; oratorio",
+    ),
     # work & movement
     ("work_enabled", True),
     ("work_write_policy", "replace"),
@@ -773,10 +802,12 @@ def _levels_from_docs(docs):
 # ---------------------------------------------------------------------------
 
 # Same relationship data Picard requests for an album, plus the place/area
-# rels the plugin otherwise browses separately.
+# rels the plugin otherwise browses separately and the genres/tags for the
+# classical detection preview.
 _PREVIEW_INC = (
     "artist-credits+recordings+artist-rels+work-rels"
     "+recording-level-rels+work-level-rels+place-rels+area-rels"
+    "+release-groups+genres+tags"
 )
 
 _MBID_RE = re.compile(
@@ -784,7 +815,7 @@ _MBID_RE = re.compile(
 )
 
 
-def _preview_sections(setting, release, track, get_work):
+def _preview_sections(setting, release, track, get_work, use_genres=True):
     """Values every section would produce for one track, computed with the
     given (possibly unsaved) option values.
 
@@ -803,11 +834,18 @@ def _preview_sections(setting, release, track, get_work):
     release_roles = _collect_release_roles(release)
     roles = _track_roles(release_roles, recording, work)
 
+    signals = _classical_signals(
+        release, release_roles, _genre_keywords(setting), with_genres=use_genres
+    )
     sections: dict[str, Any] = {
+        "classical": {
+            "signals": signals,
+            "rule": _match_classical_rule(_classical_rules(setting), signals),
+        },
         "title": {
             "canonical": recording.get("title") or "",
             "credited": track.get("title") or recording.get("title") or "",
-        }
+        },
     }
 
     def people(key, entries):
@@ -863,11 +901,162 @@ def _preview_sections(setting, release, track, get_work):
 
 
 # ---------------------------------------------------------------------------
+# Classical-or-not detection
+# ---------------------------------------------------------------------------
+
+
+def _genre_keywords(setting):
+    return {
+        part.strip().lower()
+        for part in (setting["classical_genres"] or "").split(";")
+        if part.strip()
+    }
+
+
+def _genre_names(release):
+    """Lowercased genre and folksonomy tag names of the release and its
+    release group.  Picard only requests them when 'Use genres from
+    MusicBrainz' is enabled; without it the sets are simply empty."""
+    names = set()
+    for node in (release, release.get("release-group") or {}):
+        for key in ("genres", "tags", "user-genres", "user-tags"):
+            for item in node.get(key) or []:
+                name = (item.get("name") or "").strip().lower()
+                if name:
+                    names.add(name)
+    return names
+
+
+def _classical_signals(release, roles, keywords, with_genres=True):
+    """The per-release detection signals, all computed from the release
+    document (no extra requests)."""
+    credit_ids = {
+        credit["artist"]["id"] for credit in release.get("artist-credit") or []
+    }
+    return {
+        "composer": bool(roles["composer"]["ids"]),
+        "conductor_orchestra": bool(
+            roles["conductor"]["ids"] or roles["orchestra"]["ids"]
+        ),
+        "composer_in_credit": bool(credit_ids & roles["composer"]["ids"]),
+        "genre": bool(keywords & _genre_names(release)) if with_genres else False,
+        "multi_movement": any(
+            _parent_rel(work) for work in _iter_release_works(release)
+        ),
+    }
+
+
+def _classical_rules(setting, logger=None):
+    """The rule rows as a list of {signal: 'require'|'exclude'} dicts;
+    rows without any constraint are dropped (they would match anything)."""
+    try:
+        rows = json.loads(setting["classical_rules"] or "[]")
+    except ValueError:
+        rows = None
+    if not isinstance(rows, list):
+        if logger is not None:
+            logger.warning("invalid classical detection rules; using the defaults")
+        rows = json.loads(_DEFAULT_CLASSICAL_RULES)
+    rules = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rule = {
+            signal: mode
+            for signal, mode in row.items()
+            if signal in _CLASSICAL_SIGNALS and mode in ("require", "exclude")
+        }
+        if rule:
+            rules.append(rule)
+    return rules
+
+
+def _match_classical_rule(rules, signals):
+    """Index of the first matching rule, or None."""
+    for index, rule in enumerate(rules):
+        if all(
+            signals.get(signal, False) == (mode == "require")
+            for signal, mode in rule.items()
+        ):
+            return index
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Album coordinator: defer every write until all data is fetched
+# ---------------------------------------------------------------------------
+
+# All tag writing is deferred: each track (and the album itself) registers a
+# finisher once its asynchronous data (work chains, locations) has arrived.
+# When the last track is ready the classical verdict is decided once per
+# release and every finisher runs with it.  The async fetches hold blocking
+# album tasks, so all writes still land before the album finishes loading.
+
+
+def _start_album(setting, album, release_node):
+    """Reset the per-load coordinator (track count, signals, finishers)."""
+    expected = 0
+    for medium in release_node.get("media") or []:
+        expected += len(medium.get("tracks") or [])
+        expected += len(medium.get("data-tracks") or [])
+        if medium.get("pregap"):
+            expected += 1
+    coord = {
+        "expected": expected,
+        "done": 0,
+        "signals": _classical_signals(
+            release_node,
+            _release_roles(album, release_node),
+            _genre_keywords(setting),
+        ),
+        "finishers": [],
+        "decided": None,
+    }
+    _album_cache(album)["coord"] = coord
+    return coord
+
+
+def _decide_album(setting, coord, logger=None):
+    rule = _match_classical_rule(_classical_rules(setting, logger), coord["signals"])
+    verdict = rule is not None
+    write = verdict or not setting["classical_enabled"]
+    coord["decided"] = (write, verdict)
+    for finisher in coord["finishers"]:
+        finisher(write, verdict)
+    coord["finishers"] = []
+
+
+def _when_decided(setting, coord, finisher, track_done=False, logger=None):
+    """Run finisher(write, verdict) once the release's verdict is known.
+
+    Without a coordinator (no release node) tags are written unconditionally
+    and no verdict is available."""
+    if coord is None:
+        finisher(True, None)
+        return
+    if track_done:
+        coord["done"] += 1
+    if coord["decided"] is not None:
+        finisher(*coord["decided"])
+        return
+    coord["finishers"].append(finisher)
+    if coord["done"] >= coord["expected"]:
+        _decide_album(setting, coord, logger)
+
+
+def _write_verdict_vars(metadata, coord, verdict):
+    metadata["~sc_classical"] = "1" if verdict else "0"
+    for name, value in coord["signals"].items():
+        metadata["~sc_sig_" + name] = "1" if value else "0"
+
+
+# ---------------------------------------------------------------------------
 # Metadata processors
 # ---------------------------------------------------------------------------
 
 
 def process_album(api, album, metadata, release_node):
+    setting = api.plugin_config
     if not api.global_config.setting["track_ars"]:
         api.logger.warning(
             "'Use track and release relationships' is disabled in "
@@ -875,120 +1064,147 @@ def process_album(api, album, metadata, release_node):
         )
     if release_node is None:
         return
+    coord = _start_album(setting, album, release_node)
     credits = release_node.get("artist-credit") or []
-    _apply_people(
-        api.plugin_config,
-        metadata,
-        "albumartist",
-        _adjust_credit(
-            api.plugin_config,
-            "albumartist",
-            credits,
-            _release_roles(album, release_node),
-        ),
+    entries = _adjust_credit(
+        setting, "albumartist", credits, _release_roles(album, release_node)
     )
+
+    def finisher(write, verdict):
+        if verdict is not None:
+            _write_verdict_vars(metadata, coord, verdict)
+        if write:
+            _apply_people(setting, metadata, "albumartist", entries)
+
+    _when_decided(setting, coord, finisher, logger=api.logger)
 
 
 def process_track(api, track, metadata, track_node, release_node=None):
     setting = api.plugin_config
     album = track.album
     recording = track_node.get("recording") or track_node
-
-    if setting["title_enabled"]:
-        canonical = recording.get("title") or ""
-        credited = track_node.get("title") or canonical
-        policy = setting["title_write_policy"]
-        if canonical:
-            _write_tags(metadata, setting["title_canonical"], canonical, policy)
-        if credited:
-            _write_tags(metadata, setting["title_credited"], credited, policy)
+    coord = _album_cache(album).get("coord") if release_node is not None else None
 
     performance = _pick_performance(recording)
     work = performance["work"] if performance else None
+    parent = _parent_rel(work) if work else None
 
+    # -- everything synchronous, gathered up front ----------------------
+    title_canonical = recording.get("title") or ""
+    title_credited = track_node.get("title") or title_canonical
+
+    artist_entries = albumartist_entries = artists_entries = None
+    numbering = None
     if release_node is not None:
         credits = release_node.get("artist-credit") or []
-        roles = _track_roles(_release_roles(album, release_node), recording, work)
-        _apply_people(
-            setting,
-            metadata,
-            "artist",
-            _adjust_credit(setting, "artist", credits, roles),
+        release_roles = _release_roles(album, release_node)
+        roles = _track_roles(release_roles, recording, work)
+        artist_entries = _adjust_credit(setting, "artist", credits, roles)
+        # tracks copy the album metadata before the deferred album write
+        # happens, so the album artist is applied per track as well
+        albumartist_entries = _adjust_credit(
+            setting, "albumartist", credits, release_roles
         )
-        _apply_people(
-            setting,
-            metadata,
-            "artists",
-            _credit_entries(credits, list(range(len(credits)))),
-        )
+        artists_entries = _credit_entries(credits, list(range(len(credits))))
+        numbering = _movement_groups(album, release_node).get(track_node.get("id"))
 
-    _apply_people(
-        setting, metadata, "conductor", _rel_entries(recording, "artist", "conductor")
-    )
-    _apply_people(
-        setting,
-        metadata,
-        "orchestra",
-        _rel_entries(recording, "artist", "performing orchestra"),
-    )
+    conductor_entries = _rel_entries(recording, "artist", "conductor")
+    orchestra_entries = _rel_entries(recording, "artist", "performing orchestra")
+    composer_entries = _rel_entries(work, "artist", "composer") if work else []
+    span = _performance_span(performance)
 
+    # -- asynchronous needs ----------------------------------------------
     # release id for the locations browse; None when browsing is not possible
     browse_id = None
     if release_node is not None and recording.get("id"):
         browse_id = release_node.get("id")
-
-    if setting["location_enabled"] and browse_id:
-        _fetch_locations(
-            api,
-            album,
-            browse_id,
-            partial(_apply_location, setting, metadata, recording["id"]),
-        )
-
-    if setting["recdate_enabled"]:
-        # a less-than-day-precise performance span may be beaten by dates on
-        # the 'recorded at'/'recorded in' relationships, which only the
-        # locations browse carries
-        span = _performance_span(performance)
-        if _span_score(*span) >= _FULL_SPAN_SCORE or not browse_id:
-            _write_recording_date(setting, metadata, _date_value(setting, *span))
-        else:
-            _fetch_locations(
-                api,
-                album,
-                browse_id,
-                partial(
-                    _apply_recording_date_browsed,
-                    setting,
-                    metadata,
-                    recording["id"],
-                    span,
-                ),
-            )
-
-    if not performance or not work:
-        return
-
-    _apply_people(
-        setting, metadata, "composer", _rel_entries(work, "artist", "composer")
+    # a less-than-day-precise performance span may be beaten by dates on
+    # the 'recorded at'/'recorded in' relationships, which only the
+    # locations browse carries
+    need_locations = bool(browse_id) and (
+        setting["location_enabled"]
+        or (setting["recdate_enabled"] and _span_score(*span) < _FULL_SPAN_SCORE)
     )
-
-    if not (
+    need_chain = work is not None and (
         setting["work_enabled"] or setting["key_enabled"] or setting["workyear_enabled"]
-    ):
-        return
-
-    numbering = None
-    if release_node is not None:
-        numbering = _movement_groups(album, release_node).get(track_node.get("id"))
-    parent = _parent_rel(work)
-    start_id = parent["work"]["id"] if parent else work["id"]
-    _resolve_chain(
-        api,
-        album,
-        start_id,
-        partial(_finish_work, api, metadata, work, performance, parent, numbering),
     )
+
+    results = {"locations": None, "chain": None}
+
+    def finisher(write, verdict):
+        if verdict is not None:
+            _write_verdict_vars(metadata, coord, verdict)
+        values = None
+        if results["chain"] is not None:
+            values = _work_values(
+                setting,
+                work,
+                performance,
+                parent,
+                numbering,
+                results["chain"],
+                api.logger,
+            )
+            # the hierarchy script variables are exported regardless of the
+            # verdict, so gating scripts can still see the work data
+            _write_hierarchy_vars(metadata, values)
+        if not write:
+            return
+        if setting["title_enabled"]:
+            policy = setting["title_write_policy"]
+            if title_canonical:
+                _write_tags(
+                    metadata, setting["title_canonical"], title_canonical, policy
+                )
+            if title_credited:
+                _write_tags(metadata, setting["title_credited"], title_credited, policy)
+        _apply_people(setting, metadata, "artist", artist_entries or [])
+        _apply_people(setting, metadata, "albumartist", albumartist_entries or [])
+        _apply_people(setting, metadata, "artists", artists_entries or [])
+        _apply_people(setting, metadata, "conductor", conductor_entries)
+        _apply_people(setting, metadata, "orchestra", orchestra_entries)
+        _apply_people(setting, metadata, "composer", composer_entries)
+        if results["locations"] is not None:
+            _apply_location(setting, metadata, recording["id"], results["locations"])
+        if setting["recdate_enabled"]:
+            if results["locations"] is not None:
+                _apply_recording_date_browsed(
+                    setting, metadata, recording["id"], span, results["locations"]
+                )
+            else:
+                _write_recording_date(setting, metadata, _date_value(setting, *span))
+        if values is not None:
+            _write_work_tags(setting, metadata, values, numbering)
+
+    # one guard step so the finisher cannot fire before all fetches are
+    # even requested; each async need adds one more step
+    pending = {"count": 1}
+
+    def step_done(*_args):
+        pending["count"] -= 1
+        if pending["count"] == 0:
+            _when_decided(setting, coord, finisher, track_done=True, logger=api.logger)
+
+    if need_locations:
+        pending["count"] += 1
+
+        def on_locations(locations):
+            results["locations"] = locations
+            step_done()
+
+        _fetch_locations(api, album, browse_id, on_locations)
+
+    if work is not None and need_chain:
+        pending["count"] += 1
+        start_id = parent["work"]["id"] if parent else work["id"]
+
+        def on_chain(chain):
+            results["chain"] = chain
+            step_done()
+
+        _resolve_chain(api, album, start_id, on_chain)
+
+    step_done()
 
 
 def _work_values(setting, work, performance, parent, numbering, chain, logger=None):
@@ -1051,22 +1267,18 @@ def _work_values(setting, work, performance, parent, numbering, chain, logger=No
     }
 
 
-def _finish_work(api, metadata, work, performance, parent, numbering, chain):
-    """Called when the work hierarchy has been fetched; writes everything
-    that depends on it."""
-    setting = api.plugin_config
-    values = _work_values(
-        setting, work, performance, parent, numbering, chain, api.logger
-    )
+def _write_hierarchy_vars(metadata, values):
+    """The hierarchy variables for Picard scripting."""
     levels = values["levels"]
-
-    # hierarchy variables for Picard scripting
     metadata["~sc_depth"] = str(len(levels))
     metadata["~sc_top"] = levels[-1]
     metadata["~sc_partial"] = "1" if values["partial"] else "0"
     for position, value in enumerate(levels, 1):
         metadata["~sc_l%d" % position] = value
 
+
+def _write_work_tags(setting, metadata, values, numbering):
+    """The tags derived from the fetched work hierarchy."""
     if setting["key_enabled"] and values["key"]:
         _write_tags(
             metadata, setting["tag_key"], values["key"], setting["key_write_policy"]
@@ -1258,6 +1470,21 @@ _WRITE_POLICIES = [
     ("if_empty", "policy.if_empty", "Write only if the tag is empty"),
 ]
 
+# classical detection rule cells and signal column labels
+_RULE_CELL_MODES = [
+    ("", "classical.cell.ignore", "—"),
+    ("require", "classical.cell.require", "required"),
+    ("exclude", "classical.cell.exclude", "must not hold"),
+]
+
+_CLASSICAL_SIGNAL_LABELS = {
+    "composer": "Work has composer",
+    "conductor_orchestra": "Conductor/orchestra",
+    "composer_in_credit": "Composer in credit",
+    "genre": "Classical genre",
+    "multi_movement": "Multi-movement work",
+}
+
 # sections with a "Write sort to" field; the preview shows no sort row for
 # the others (e.g. location - places have no sort names)
 _SORT_SECTIONS = {
@@ -1390,6 +1617,7 @@ class SimpleClassicalOptionsPage(OptionsPage):
 
         self._add_preset_box()
         self._add_preview_box()
+        self._add_classical_box()
         for key, label, note, has_sort, has_split, has_roles in _PEOPLE_UI:
             self._add_people_box(key, label, note, has_sort, has_split, has_roles)
         # everything read straight off the release/recording first (people,
@@ -1493,6 +1721,100 @@ class SimpleClassicalOptionsPage(OptionsPage):
         )
         self._preview_status.setWordWrap(True)
         form.addRow(self._preview_status)
+
+    def _add_classical_box(self):
+        tr = self._tr
+        form = self._add_box(
+            "classical_enabled", tr("section.classical.label", "Classical detection")
+        )
+        self._note_row(
+            form,
+            tr(
+                "section.classical.note",
+                "Decides per release whether the plugin tags it at all: the "
+                "release counts as classical if any rule row matches, and a "
+                "row matches when every signal set to 'required' holds and "
+                "none set to 'must not hold' does. With this section "
+                "disabled every release is tagged. The verdict is always "
+                "exported to Picard scripts as %_sc_classical% (single "
+                "signals as %_sc_sig_...%). The genre signal needs 'Use "
+                "genres from MusicBrainz' enabled in Picard's options.",
+            ),
+        )
+        self._text_row(
+            form, tr("classical.genres", "Genre keywords:"), "classical_genres"
+        )
+        self.rules_table = QtWidgets.QTableWidget(0, len(_CLASSICAL_SIGNALS))
+        self.rules_table.setHorizontalHeaderLabels(
+            [
+                tr("classical.col.%s" % signal, _CLASSICAL_SIGNAL_LABELS[signal])
+                for signal in _CLASSICAL_SIGNALS
+            ]
+        )
+        horizontal_header = self.rules_table.horizontalHeader()
+        assert horizontal_header is not None
+        horizontal_header.setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        horizontal_header.setStretchLastSection(True)
+        form.addRow(self.rules_table)
+        buttons = QtWidgets.QHBoxLayout()
+        add_button = QtWidgets.QPushButton(tr("classical.add_rule", "Add rule"))
+        remove_button = QtWidgets.QPushButton(
+            tr("classical.remove_selected", "Remove selected")
+        )
+        add_button.clicked.connect(self._add_rule_row)
+        remove_button.clicked.connect(self._remove_rule_row)
+        buttons.addWidget(add_button)
+        buttons.addWidget(remove_button)
+        buttons.addStretch()
+        form.addRow(buttons)
+        self._preview_row(form, "classical")
+
+    def _add_rule_row(self, values=None):
+        row = self.rules_table.rowCount()
+        self.rules_table.insertRow(row)
+        values = values if isinstance(values, dict) else {}
+        for column, signal in enumerate(_CLASSICAL_SIGNALS):
+            combo = QtWidgets.QComboBox()
+            for value, tr_key, text in _RULE_CELL_MODES:
+                combo.addItem(self._tr(tr_key, text), value)
+            combo.setCurrentIndex(max(combo.findData(values.get(signal) or ""), 0))
+            combo.currentIndexChanged.connect(self._schedule_preview_refresh)
+            self.rules_table.setCellWidget(row, column, combo)
+
+    def _remove_rule_row(self):
+        row = self.rules_table.currentRow()
+        if row >= 0:
+            self.rules_table.removeRow(row)
+            self._schedule_preview_refresh()
+
+    def _load_rules(self, text):
+        self.rules_table.setRowCount(0)
+        try:
+            rows = json.loads(text or "[]")
+        except ValueError:
+            rows = []
+        if not isinstance(rows, list):
+            rows = []
+        for row in rows:
+            self._add_rule_row(row)
+
+    def _save_rules(self):
+        rules = []
+        for row in range(self.rules_table.rowCount()):
+            rule = {}
+            for column, signal in enumerate(_CLASSICAL_SIGNALS):
+                combo = self.rules_table.cellWidget(row, column)
+                value = (
+                    combo.currentData()
+                    if isinstance(combo, QtWidgets.QComboBox)
+                    else ""
+                )
+                if value:
+                    rule[signal] = value
+            rules.append(rule)
+        return json.dumps(rules)
 
     def _preview_row(self, form, key):
         """Add a lightweight, non-interactive field/value preview."""
@@ -1819,6 +2141,7 @@ class SimpleClassicalOptionsPage(OptionsPage):
         for option, combo in self._modes.items():
             setting[option] = combo.currentData()
         setting["depth_overrides"] = self._save_overrides()
+        setting["classical_rules"] = self._save_rules()
         return setting
 
     def _set_preview(self, key, rows):
@@ -1874,8 +2197,9 @@ class SimpleClassicalOptionsPage(OptionsPage):
             return
         medium_index, track_index = position
         track = release["media"][medium_index]["tracks"][track_index]
+        use_genres = bool(self.api.global_config.setting["use_genres"])
         sections, pending = _preview_sections(
-            self._ui_settings(), release, track, self._preview_get_work
+            self._ui_settings(), release, track, self._preview_get_work, use_genres
         )
         for work_id in pending:
             self._fetch_preview_work(work_id)
@@ -1885,6 +2209,34 @@ class SimpleClassicalOptionsPage(OptionsPage):
 
         tr = self._tr
         nothing_found = tr("preview.nothing_found", "(nothing found)")
+
+        info = sections.get("classical")
+        if info:
+            if info["rule"] is not None:
+                verdict = tr("preview.classical_yes", "Classical — rule %d matched") % (
+                    info["rule"] + 1
+                )
+            else:
+                verdict = tr("preview.classical_no", "Not classical — no rule matched")
+            yes = tr("preview.signal_yes", "yes")
+            no = tr("preview.signal_no", "no")
+            classical_rows = [("", verdict)]
+            for signal in _CLASSICAL_SIGNALS:
+                value = yes if info["signals"][signal] else no
+                if signal == "genre" and not use_genres:
+                    value = tr(
+                        "preview.genre_disabled", "no (genres are disabled in Picard)"
+                    )
+                classical_rows.append(
+                    (
+                        tr(
+                            "classical.col.%s" % signal,
+                            _CLASSICAL_SIGNAL_LABELS[signal],
+                        ),
+                        value,
+                    )
+                )
+            self._set_preview("classical", classical_rows)
         for key in (
             "title",
             "artist",
@@ -2006,6 +2358,7 @@ class SimpleClassicalOptionsPage(OptionsPage):
         for option, combo in self._modes.items():
             combo.setCurrentIndex(max(combo.findData(setting[option]), 0))
         self._load_overrides(setting["depth_overrides"])
+        self._load_rules(setting["classical_rules"])
 
     def save(self):
         setting = self.api.plugin_config
@@ -2016,6 +2369,7 @@ class SimpleClassicalOptionsPage(OptionsPage):
         for option, combo in self._modes.items():
             setting[option] = combo.currentData()
         setting["depth_overrides"] = self._save_overrides()
+        setting["classical_rules"] = self._save_rules()
 
     def restore_defaults(self):
         """Show the plugin's defaults in the dialog (nothing is saved until
@@ -2031,6 +2385,7 @@ class SimpleClassicalOptionsPage(OptionsPage):
         for option, combo in self._modes.items():
             combo.setCurrentIndex(max(combo.findData(defaults[option]), 0))
         self._load_overrides(defaults["depth_overrides"])
+        self._load_rules(defaults["classical_rules"])
 
 
 # ---------------------------------------------------------------------------
