@@ -334,8 +334,7 @@ The options page uses Picard 3's plugin i18n support. The UI is available
 in English, German and Japanese; Picard's interface language (Options →
 User Interface) selects the catalog, and any missing key falls back to
 English. MusicBrainz relationship and tag names (`recorded at`,
-`ensemble`, …) are left untranslated on purpose — they name the actual
-data.
+`ensemble`, …) are left untranslated on purpose.
 
 To add a language, copy `locale/en.toml` to `locale/<code>.toml` (e.g.
 `fr.toml`) and translate the values; the file is picked up on the next
