@@ -6,6 +6,21 @@ small mapping interface decides which tags each fact is written to. Every
 section can be disabled, every tag name is yours to choose, and an empty tag
 list simply writes nothing.
 
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Default output](#default-output)
+- [The options page](#the-options-page)
+- [Work hierarchy templates](#work-hierarchy-templates)
+- [Classical-or-not detection](#classical-or-not-detection)
+- [Data quirks handled](#data-quirks-handled)
+- [Relationship to Classical Extras](#relationship-to-classical-extras)
+  - [General approach](#general-approach)
+  - [Shared functionality](#shared-functionality)
+  - [Only in Simple Classical](#only-in-simple-classical)
+  - [Only in Classical Extras](#only-in-classical-extras)
+- [Translations](#translations)
+- [Development environment](#development-environment)
+
 ## Requirements
 
 - Picard 3.x (for Picard 2.x use the `simple_classical` package instead)
