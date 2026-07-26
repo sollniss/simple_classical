@@ -7,6 +7,7 @@ authors = ["sollniss"]
 license = "GPL-2.0-or-later"
 license_url = "https://www.gnu.org/licenses/gpl-2.0.html"
 categories = ["metadata"]
+source_locale = "en"
 long_description = """
 For every kind of data (title, artist, album artist, artists, composer,
 conductor, orchestra, recording location, work/movement hierarchy, key,
@@ -20,4 +21,39 @@ for portable, Picard-native, Roon and MPD tagging.
 
 Requires "Use track and release relationships" to be enabled in
 Options > Metadata.
+"""
+
+[description_i18n]
+de = "Leichtgewichtiges Klassik-Tagging mit einer einfachen, anpassbaren Zuordnungsoberfläche."
+ja = "シンプルでカスタマイズ可能なマッピングインターフェースを備えた、軽量なクラシック音楽用タグ付けプラグイン。"
+
+[long_description_i18n]
+de = """
+Für jede Art von Daten (Titel, Interpret, Album-Interpret, Interpreten,
+Komponist, Dirigent, Orchester, Aufnahmeort, Werk-/Satzhierarchie, Tonart,
+Kompositionsjahr, Aufnahmedatum) wählen Sie, in welche Tags sie geschrieben
+werden - getrennt für kanonische und angegebene Namen, wo beide existieren.
+Leere Tag-Listen schreiben nichts. Die Werkhierarchie wird über kleine
+Vorlagen (%L1%, %top%, %top..L1{:: }%) mit optionalen Überschreibungen pro
+Tiefe ausgegeben, und alle Hierarchieebenen werden als %_sc_...%-Variablen
+für Picard-Skripte exportiert. Jeder Abschnitt kann vorhandene Tags ersetzen,
+ergänzen, zusammenführen oder erhalten, mit Ziel-Voreinstellungen für
+portables, Picard-natives, Roon- und MPD-Tagging.
+
+Erfordert, dass "Beziehungen für Titel und Veröffentlichungen verwenden"
+unter Optionen > Metadaten aktiviert ist.
+"""
+ja = """
+あらゆる種類のデータ（タイトル、アーティスト、アルバムアーティスト、
+アーティスト一覧、作曲者、指揮者、オーケストラ、録音場所、作品/楽章の階層、
+調、作曲年、録音日）について、書き込み先のタグを選択できます。正式名と
+クレジット表記の両方が存在する場合は、それぞれ別々に指定できます。空のタグ
+一覧には何も書き込まれません。作品階層は小さなテンプレート（%L1%、%top%、
+%top..L1{:: }%）で出力され、深さごとの上書きも可能です。また、すべての階層は
+%_sc_...% 変数として Picard スクリプトにエクスポートされます。各セクションは
+既存タグの置き換え、追記、統合、保持を選択でき、汎用・Picard ネイティブ・
+Roon・MPD 向けの書き込み先プリセットも用意されています。
+
+「オプション > メタデータ」で「トラックとリリースのリレーションシップを使用」を
+有効にする必要があります。
 """

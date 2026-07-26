@@ -1244,17 +1244,18 @@ _PEOPLE_UI = [
     ),
 ]
 
+# mode tables: (stored value, translation key, English default text)
 _ROLE_MODES = [
-    ("keep", "Keep as credited"),
-    ("remove", "Remove if present"),
-    ("add", "Add if missing"),
+    ("keep", "role_mode.keep", "Keep as credited"),
+    ("remove", "role_mode.remove", "Remove if present"),
+    ("add", "role_mode.add", "Add if missing"),
 ]
 
 _WRITE_POLICIES = [
-    ("replace", "Replace existing values"),
-    ("append", "Append generated values"),
-    ("merge", "Merge without duplicates"),
-    ("if_empty", "Write only if the tag is empty"),
+    ("replace", "policy.replace", "Replace existing values"),
+    ("append", "policy.append", "Append generated values"),
+    ("merge", "policy.merge", "Merge without duplicates"),
+    ("if_empty", "policy.if_empty", "Write only if the tag is empty"),
 ]
 
 # sections with a "Write sort to" field; the preview shows no sort row for
@@ -1264,9 +1265,9 @@ _SORT_SECTIONS = {
 }
 
 _DATE_MODES = [
-    ("end", "Last day of the sessions"),
-    ("begin", "First day of the sessions"),
-    ("range", "Full range (e.g. 1983-09-20 - 1983-09-27)"),
+    ("end", "date_mode.end", "Last day of the sessions"),
+    ("begin", "date_mode.begin", "First day of the sessions"),
+    ("range", "date_mode.range", "Full range (e.g. 1983-09-20 - 1983-09-27)"),
 ]
 
 _PORTABLE_TAGS = {
@@ -1396,11 +1397,19 @@ class SimpleClassicalOptionsPage(OptionsPage):
         # (hierarchy, key, composition year share the work lookups)
         self._add_recdate_box()
         self._add_work_box()
-        self._add_simple_box("key_enabled", "Key", [("Write to:", "tag_key")], "key")
+        self._add_simple_box(
+            "key_enabled",
+            self._tr("section.key.label", "Key"),
+            [(self._tr("ui.write_to", "Write to:"), "tag_key")],
+            "key",
+        )
         self._add_simple_box(
             "workyear_enabled",
-            "Composition year",
-            [("Write to:", "tag_work_year"), ("Suffix:", "composed_suffix")],
+            self._tr("section.workyear.label", "Composition year"),
+            [
+                (self._tr("ui.write_to", "Write to:"), "tag_work_year"),
+                (self._tr("ui.suffix", "Suffix:"), "composed_suffix"),
+            ],
             "work_year",
         )
         self._layout.addStretch()
@@ -1419,14 +1428,18 @@ class SimpleClassicalOptionsPage(OptionsPage):
 
     # -- section builders ------------------------------------------------
 
+    def _tr(self, key, text):
+        """Translate a UI string through the plugin's locale/ catalogs."""
+        return self.api.tr(key, text)
+
     def _add_preset_box(self):
-        box = QtWidgets.QGroupBox("Tagging preset")
+        box = QtWidgets.QGroupBox(self._tr("preset.box", "Tagging preset"))
         self._layout.addWidget(box)
         form = QtWidgets.QFormLayout(box)
         self._preset_combo = QtWidgets.QComboBox()
         for key, label, _values in _TAG_PRESETS:
-            self._preset_combo.addItem(label, key)
-        apply_button = QtWidgets.QPushButton("Apply preset")
+            self._preset_combo.addItem(self._tr("preset.%s" % key, label), key)
+        apply_button = QtWidgets.QPushButton(self._tr("preset.apply", "Apply preset"))
         apply_button.clicked.connect(self._apply_preset)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self._preset_combo)
@@ -1434,9 +1447,12 @@ class SimpleClassicalOptionsPage(OptionsPage):
         form.addRow(row)
         self._note_row(
             form,
-            "Presets change output tag fields only. Enabled sections, "
-            "templates and existing-tag policies remain unchanged, and every "
-            "field stays editable.",
+            self._tr(
+                "preset.note",
+                "Presets change output tag fields only. Enabled sections, "
+                "templates and existing-tag policies remain unchanged, and every "
+                "field stays editable.",
+            ),
         )
 
     def _apply_preset(self):
@@ -1451,24 +1467,29 @@ class SimpleClassicalOptionsPage(OptionsPage):
             break
 
     def _add_preview_box(self):
-        box = QtWidgets.QGroupBox("Preview")
+        box = QtWidgets.QGroupBox(self._tr("preview.box", "Preview"))
         self._layout.addWidget(box)
         form = QtWidgets.QFormLayout(box)
         row = QtWidgets.QHBoxLayout()
         self._preview_input = QtWidgets.QLineEdit()
-        self._preview_input.setPlaceholderText("MusicBrainz release URL or MBID")
+        self._preview_input.setPlaceholderText(
+            self._tr("preview.placeholder", "MusicBrainz release URL or MBID")
+        )
         self._preview_input.returnPressed.connect(self._load_preview)
-        load_button = QtWidgets.QPushButton("Load")
+        load_button = QtWidgets.QPushButton(self._tr("preview.load", "Load"))
         load_button.clicked.connect(self._load_preview)
         row.addWidget(self._preview_input)
         row.addWidget(load_button)
         form.addRow(row)
         self._preview_tracks = QtWidgets.QComboBox()
         self._preview_tracks.currentIndexChanged.connect(self._schedule_preview_refresh)
-        form.addRow("Track:", self._preview_tracks)
+        form.addRow(self._tr("preview.track", "Track:"), self._preview_tracks)
         self._preview_status = QtWidgets.QLabel(
-            "Load a release to see, next to each section, the values it "
-            "produces with the current (unsaved) settings."
+            self._tr(
+                "preview.hint",
+                "Load a release to see, next to each section, the values it "
+                "produces with the current (unsaved) settings.",
+            )
         )
         self._preview_status.setWordWrap(True)
         form.addRow(self._preview_status)
@@ -1503,78 +1524,147 @@ class SimpleClassicalOptionsPage(OptionsPage):
 
     def _mode_row(self, form, label, option, modes):
         combo = QtWidgets.QComboBox()
-        for value, text in modes:
-            combo.addItem(text, value)
+        for value, tr_key, text in modes:
+            combo.addItem(self._tr(tr_key, text), value)
         self._modes[option] = combo
         form.addRow(label, combo)
 
     def _add_people_box(self, key, label, note, has_sort, has_split, has_roles):
-        form = self._add_box("%s_enabled" % key, label)
+        form = self._add_box(
+            "%s_enabled" % key, self._tr("section.%s.label" % key, label)
+        )
         if note:
-            self._note_row(form, note)
-        self._mode_row(form, "Existing tags:", "%s_write_policy" % key, _WRITE_POLICIES)
+            self._note_row(form, self._tr("section.%s.note" % key, note))
+        self._mode_row(
+            form,
+            self._tr("ui.existing_tags", "Existing tags:"),
+            "%s_write_policy" % key,
+            _WRITE_POLICIES,
+        )
         if has_roles:
             for role in _ROLES:
                 self._mode_row(
                     form,
-                    role.capitalize() + ":",
+                    self._tr("role.%s" % role, role.capitalize() + ":"),
                     "%s_role_%s" % (key, role),
                     _ROLE_MODES,
                 )
-        self._text_row(form, "Write canonical to:", "%s_canonical" % key)
-        self._text_row(form, "Write credited to:", "%s_credited" % key)
+        self._text_row(
+            form,
+            self._tr("ui.write_canonical", "Write canonical to:"),
+            "%s_canonical" % key,
+        )
+        self._text_row(
+            form,
+            self._tr("ui.write_credited", "Write credited to:"),
+            "%s_credited" % key,
+        )
         if has_sort:
-            self._text_row(form, "Write sort to:", "%s_sort" % key)
+            self._text_row(
+                form, self._tr("ui.write_sort", "Write sort to:"), "%s_sort" % key
+            )
         if has_split:
-            check = QtWidgets.QCheckBox("Split into multiple values")
+            check = QtWidgets.QCheckBox(
+                self._tr("ui.split", "Split into multiple values")
+            )
             check.setToolTip(
-                "Unchecked: one value joined with the credited join "
-                "phrases (e.g. “A & B”), or '; ' where none exist."
+                self._tr(
+                    "ui.split_tooltip",
+                    "Unchecked: one value joined with the credited join "
+                    "phrases (e.g. “A & B”), or '; ' where none exist.",
+                )
             )
             self._checks["%s_split" % key] = check
             form.addRow(check)
         if key == "location":
             check = QtWidgets.QCheckBox(
-                "Fall back to the “recorded in” area if no “recorded at” "
-                "place is linked"
+                self._tr(
+                    "ui.location_fallback",
+                    "Fall back to the “recorded in” area if no “recorded at” "
+                    "place is linked",
+                )
             )
             check.setToolTip(
-                "Areas are often just a city or country; leave unchecked "
-                "to write the tag only for an actual venue."
+                self._tr(
+                    "ui.location_fallback_tooltip",
+                    "Areas are often just a city or country; leave unchecked "
+                    "to write the tag only for an actual venue.",
+                )
             )
             self._checks["location_area_fallback"] = check
             form.addRow(check)
         self._preview_row(form, key)
 
     def _add_work_box(self):
-        form = self._add_box("work_enabled", "Work && movement")
-        self._note_row(form, _TEMPLATE_HELP)
-        self._mode_row(form, "Existing tags:", "work_write_policy", _WRITE_POLICIES)
-        self._text_row(form, "Movement value:", "tpl_movement")
-        self._text_row(form, "Write movement to:", "tag_movement")
-        self._text_row(form, "Grouping value:", "tpl_grouping")
-        self._text_row(form, "Write grouping to:", "tag_grouping")
-        self._text_row(form, "Work value:", "tpl_work")
-        self._text_row(form, "Write work to:", "tag_work")
-        self._text_row(form, "Partial performance suffix:", "part_suffix")
-        self._text_row(form, "Write movement number to:", "tag_movementnumber")
-        self._text_row(form, "Write movement total to:", "tag_movementtotal")
-        self._text_row(form, "Write show movement to:", "tag_showmovement")
+        form = self._add_box(
+            "work_enabled", self._tr("section.work.label", "Work && movement")
+        )
+        self._note_row(form, self._tr("work.template_help", _TEMPLATE_HELP))
+        self._mode_row(
+            form,
+            self._tr("ui.existing_tags", "Existing tags:"),
+            "work_write_policy",
+            _WRITE_POLICIES,
+        )
+        tr = self._tr
+        self._text_row(
+            form, tr("work.movement_value", "Movement value:"), "tpl_movement"
+        )
+        self._text_row(
+            form, tr("work.write_movement", "Write movement to:"), "tag_movement"
+        )
+        self._text_row(
+            form, tr("work.grouping_value", "Grouping value:"), "tpl_grouping"
+        )
+        self._text_row(
+            form, tr("work.write_grouping", "Write grouping to:"), "tag_grouping"
+        )
+        self._text_row(form, tr("work.work_value", "Work value:"), "tpl_work")
+        self._text_row(form, tr("work.write_work", "Write work to:"), "tag_work")
+        self._text_row(
+            form, tr("work.part_suffix", "Partial performance suffix:"), "part_suffix"
+        )
+        self._text_row(
+            form,
+            tr("work.write_movementnumber", "Write movement number to:"),
+            "tag_movementnumber",
+        )
+        self._text_row(
+            form,
+            tr("work.write_movementtotal", "Write movement total to:"),
+            "tag_movementtotal",
+        )
+        self._text_row(
+            form,
+            tr("work.write_showmovement", "Write show movement to:"),
+            "tag_showmovement",
+        )
 
         self._note_row(
-            form, "Depth-specific overrides (empty cell = use the general value above):"
+            form,
+            tr(
+                "work.overrides_note",
+                "Depth-specific overrides (empty cell = use the general value above):",
+            ),
         )
         self.overrides_table = QtWidgets.QTableWidget(0, 4)
         self.overrides_table.setHorizontalHeaderLabels(
-            ["Depth", "Movement", "Grouping", "Work"]
+            [
+                tr("work.col_depth", "Depth"),
+                tr("work.col_movement", "Movement"),
+                tr("work.col_grouping", "Grouping"),
+                tr("work.col_work", "Work"),
+            ]
         )
         horizontal_header = self.overrides_table.horizontalHeader()
         assert horizontal_header is not None
         horizontal_header.setStretchLastSection(True)
         form.addRow(self.overrides_table)
         buttons = QtWidgets.QHBoxLayout()
-        add_button = QtWidgets.QPushButton("Add override")
-        remove_button = QtWidgets.QPushButton("Remove selected")
+        add_button = QtWidgets.QPushButton(tr("work.add_override", "Add override"))
+        remove_button = QtWidgets.QPushButton(
+            tr("work.remove_selected", "Remove selected")
+        )
         add_button.clicked.connect(self._add_override_row)
         remove_button.clicked.connect(self._remove_override_row)
         buttons.addWidget(add_button)
@@ -1586,26 +1676,46 @@ class SimpleClassicalOptionsPage(OptionsPage):
     def _add_simple_box(self, enabled_option, label, rows, preview_key=None):
         form = self._add_box(enabled_option, label)
         policy_option = enabled_option.removesuffix("_enabled") + "_write_policy"
-        self._mode_row(form, "Existing tags:", policy_option, _WRITE_POLICIES)
+        self._mode_row(
+            form,
+            self._tr("ui.existing_tags", "Existing tags:"),
+            policy_option,
+            _WRITE_POLICIES,
+        )
         for row_label, option in rows:
             self._text_row(form, row_label, option)
         if preview_key:
             self._preview_row(form, preview_key)
 
     def _add_recdate_box(self):
-        form = self._add_box("recdate_enabled", "Recording date")
+        form = self._add_box(
+            "recdate_enabled", self._tr("section.recdate.label", "Recording date")
+        )
         self._note_row(
             form,
-            "From the performance relationship's dates or the “recorded "
-            "at”/“recorded in” relationship dates, whichever is more "
-            "precise (the performance relationship wins ties). Checking "
-            "the place dates needs one extra MusicBrainz request per album "
-            "(shared with the recording location section), skipped when "
-            "the performance dates are already day-precise.",
+            self._tr(
+                "section.recdate.note",
+                "From the performance relationship's dates or the “recorded "
+                "at”/“recorded in” relationship dates, whichever is more "
+                "precise (the performance relationship wins ties). Checking "
+                "the place dates needs one extra MusicBrainz request per album "
+                "(shared with the recording location section), skipped when "
+                "the performance dates are already day-precise.",
+            ),
         )
-        self._mode_row(form, "Existing tags:", "recdate_write_policy", _WRITE_POLICIES)
-        self._text_row(form, "Write to:", "tag_recordingdate")
-        self._mode_row(form, "Date style:", "recording_date_mode", _DATE_MODES)
+        self._mode_row(
+            form,
+            self._tr("ui.existing_tags", "Existing tags:"),
+            "recdate_write_policy",
+            _WRITE_POLICIES,
+        )
+        self._text_row(form, self._tr("ui.write_to", "Write to:"), "tag_recordingdate")
+        self._mode_row(
+            form,
+            self._tr("ui.date_style", "Date style:"),
+            "recording_date_mode",
+            _DATE_MODES,
+        )
         self._preview_row(form, "recordingdate")
 
     # -- preview ---------------------------------------------------------
@@ -1615,8 +1725,11 @@ class SimpleClassicalOptionsPage(OptionsPage):
         match = _MBID_RE.search(text)
         if not match or ("musicbrainz.org" in text and "/release/" not in text):
             self._preview_status.setText(
-                "Please paste a release link or MBID (other entities are "
-                "not supported)."
+                self._tr(
+                    "preview.invalid",
+                    "Please paste a release link or MBID (other entities are "
+                    "not supported).",
+                )
             )
             return
         self._preview_release = None
@@ -1626,7 +1739,7 @@ class SimpleClassicalOptionsPage(OptionsPage):
         self._preview_tracks.blockSignals(True)
         self._preview_tracks.clear()
         self._preview_tracks.blockSignals(False)
-        self._preview_status.setText("Loading release…")
+        self._preview_status.setText(self._tr("preview.loading", "Loading release…"))
         alive = self._alive
 
         def handler(document, reply, error):
@@ -1650,7 +1763,9 @@ class SimpleClassicalOptionsPage(OptionsPage):
         document, error = self._pending_loaded
         self._pending_loaded = None
         if error or not document:
-            self._preview_status.setText("Could not load the release.")
+            self._preview_status.setText(
+                self._tr("preview.failed", "Could not load the release.")
+            )
             return
         self._preview_release = document
         self._preview_tracks.blockSignals(True)
@@ -1768,6 +1883,8 @@ class SimpleClassicalOptionsPage(OptionsPage):
         def fmt(value):
             return "; ".join(value) if isinstance(value, list) else value
 
+        tr = self._tr
+        nothing_found = tr("preview.nothing_found", "(nothing found)")
         for key in (
             "title",
             "artist",
@@ -1785,38 +1902,46 @@ class SimpleClassicalOptionsPage(OptionsPage):
                 else ("canonical", "credited")
             )
             if not data:
-                rows = [("", "(nothing found)")]
+                rows = [("", nothing_found)]
             else:
                 rows = [
-                    (field, fmt(data[field]))
+                    (tr("field.%s" % field, field), fmt(data[field]))
                     for field in fields
                     if fmt(data.get(field))
                 ]
-            self._set_preview(key, rows or [("", "(nothing found)")])
+            self._set_preview(key, rows or [("", nothing_found)])
 
         values = sections.get("work")
         if values == "pending":
-            work_rows = [("", "(loading work hierarchy…)")]
-            key_value = year_value = "(loading…)"
+            work_rows = [("", tr("preview.loading_works", "(loading work hierarchy…)"))]
+            key_value = year_value = tr("preview.loading_short", "(loading…)")
         elif not values:
-            work_rows = [("", "(no linked work)")]
-            key_value = year_value = "(no linked work)"
+            no_work = tr("preview.no_work", "(no linked work)")
+            work_rows = [("", no_work)]
+            key_value = year_value = no_work
         else:
             work_rows = [
-                (name, values[name])
+                (tr("field.%s" % name, name), values[name])
                 for name in ("movement", "grouping", "work")
                 if values[name]
             ]
             if values["movement"] and values["numbering"]:
-                work_rows.append(("movement no.", "%d of %d" % values["numbering"]))
-            work_rows = work_rows or [("", "(empty)")]
-            key_value = values["key"] or "(none)"
-            year_value = values["work_year"] or "(none)"
+                work_rows.append(
+                    (
+                        tr("preview.movement_no", "movement no."),
+                        tr("preview.movement_of", "%d of %d") % values["numbering"],
+                    )
+                )
+            work_rows = work_rows or [("", tr("preview.empty", "(empty)"))]
+            none_value = tr("preview.none", "(none)")
+            key_value = values["key"] or none_value
+            year_value = values["work_year"] or none_value
         self._set_preview("work", work_rows)
         self._set_preview("key", [("", key_value)])
         self._set_preview("work_year", [("", year_value)])
         self._set_preview(
-            "recordingdate", [("", sections.get("recordingdate") or "(no date)")]
+            "recordingdate",
+            [("", sections.get("recordingdate") or tr("preview.no_date", "(no date)"))],
         )
 
     # -- overrides table -------------------------------------------------

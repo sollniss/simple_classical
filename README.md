@@ -265,6 +265,20 @@ Other differences in approach:
 - Free-form tag mapping with constants and concatenation, custom file
   pane columns, per-release debug logs.
 
+## Translations
+
+The options page uses Picard 3's plugin i18n support. The UI is available
+in English, German and Japanese; Picard's interface language (Options →
+User Interface) selects the catalog, and any missing key falls back to
+English. MusicBrainz relationship and tag names (`recorded at`,
+`ensemble`, …) are left untranslated on purpose — they name the actual
+data.
+
+To add a language, copy `locale/en.toml` to `locale/<code>.toml` (e.g.
+`fr.toml`) and translate the values; the file is picked up on the next
+plugin load. Translations of the plugin description live in
+`MANIFEST.toml` (`description_i18n`, `long_description_i18n`).
+
 ## Development environment
 
 The Nix development shell provides Python 3.13, PyQt6, Picard's Python runtime
