@@ -157,6 +157,15 @@ values through templates:
 
 - `%L1%`: the performed work (deepest level), title relative to its parent
 - `%L2%`, `%L3%`, etc. refer parents, and `%top%` the topmost work (full title)
+- The hierarchy is climbed all the way to the top, so the usable levels
+  follow the data: a standalone work has only `%L1%`, a five-level one
+  `%L1%` through `%L5%` (`%_sc_depth%` tells you how many a track has)
+
+Where a work is part of _several_ works (a symphony movement that is also
+part of a compilation work), one path is climbed, not both: the plugin
+prefers the parent whose title actually prefixes the work's title, then one
+that numbers the work as one of its parts, then one whose work type implies
+movements (symphony, opera, suite, …).
 - Ranges join several levels: `%top..L1{:: }%` renders top-down glued with
   `:: `; `%L2..top{; }%` renders bottom-up. Separator defaults to `; `.
   Direction follows the written order and levels that don't exist render as
@@ -284,7 +293,7 @@ Other differences in approach:
 
 | Functionality                               | Simple Classical                                                                                                       | Classical Extras                                                                                                            | Compatibility                                                                                                                                                                            |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Work/movement from the MB work hierarchy    | Templates (`%L1%`, `%top%`, ranges), up to 4 levels, per-depth overrides                                               | Unlimited levels; three naming styles: MB canonical, track-title text, or canonical enhanced with title text                | Both default to a `::`-separated multi-level work value; names differ where Classical Extras' default "extended" style appends `{title text}`                                            |
+| Work/movement from the MB work hierarchy    | Templates (`%L1%`, `%top%`, ranges), unlimited levels, per-depth overrides                                             | Unlimited levels; three naming styles: MB canonical, track-title text, or canonical enhanced with title text                | Both default to a `::`-separated multi-level work value; names differ where Classical Extras' default "extended" style appends `{title text}`                                            |
 | Movement titles relative to the parent work | Strips the parent title and leading punctuation                                                                        | Also strips repeated text elsewhere in the title, with similarity thresholds and synonym lists                              | Same result on well-formed MB titles; Classical Extras cleans up inconsistent data more aggressively                                                                                     |
 | Movement numbering                          | Counts tracks within the parent work per disc; split movements numbered separately                                     | Same semantics, with additional rules for interleaved works                                                                 | Both write `movement`, `movementnumber`, `movementtotal` by default                                                                                                                      |
 | Partial performances                        | Suffix on the movement, default `: (part)`                                                                             | Notional sub-part with suffix, default ` (part)`                                                                            | Same concept, slightly different default text                                                                                                                                            |

@@ -294,33 +294,97 @@ def _is_arrangement(work):
     return False
 
 
-def _pick_performance(recording):
-    """Pick the most plausible performance relationship of a recording.
+def _pick_rel(rels, score):
+    """The highest-scoring relationship, or None if there is no candidate.
 
-    Recordings are sometimes linked to several works (typically the original
-    plus an arrangement of it).  Prefer non-arrangements and relationships
-    that carry performance dates.
+    score(rel) returns a number, or None for a relationship to skip.  Ties
+    keep the one MusicBrainz listed first, so an unscored field never
+    reshuffles what the plugin used to pick.
     """
     best, best_score = None, None
-    for rel in _work_rels(recording, "performance"):
-        if not rel.get("work"):
+    for rel in rels:
+        value = score(rel)
+        if value is None:
             continue
-        score = 0
-        if _is_arrangement(rel["work"]):
-            score -= 10
-        if rel.get("begin") or rel.get("end"):
-            score += 2
-        if "cover" in (rel.get("attributes") or []):
-            score -= 1
-        if best_score is None or score > best_score:
-            best, best_score = rel, score
+        if best_score is None or value > best_score:
+            best, best_score = rel, value
     return best
 
 
+def _performance_score(rel):
+    """Recordings are sometimes linked to several works (typically the
+    original plus an arrangement of it).  Prefer non-arrangements and
+    relationships that carry performance dates."""
+    if not rel.get("work"):
+        return None
+    score = 0
+    if _is_arrangement(rel["work"]):
+        score -= 10
+    if rel.get("begin") or rel.get("end"):
+        score += 2
+    if "cover" in (rel.get("attributes") or []):
+        score -= 1
+    return score
+
+
+def _pick_performance(recording):
+    """Pick the most plausible performance relationship of a recording."""
+    return _pick_rel(_work_rels(recording, "performance"), _performance_score)
+
+
+# Work types that inherently have parts.  A parent typed this way is more
+# likely to be the real hierarchy than an untyped work that merely collects
+# pieces together.
+_CONTAINER_WORK_TYPES = {
+    "Ballet",
+    "Cantata",
+    "Concerto",
+    "Mass",
+    "Musical",
+    "Opera",
+    "Operetta",
+    "Oratorio",
+    "Partita",
+    "Quartet",
+    "Sonata",
+    "Song-cycle",
+    "Suite",
+    "Symphony",
+    "Zarzuela",
+}
+
+
 def _parent_rel(work):
-    for rel in _work_rels(work, "parts", "backward"):
-        return rel
-    return None
+    """Pick the 'part of' parent to climb to when a work has several.
+
+    A work can sit in more than one hierarchy (a movement of a symphony
+    that is also part of a compilation work), and MusicBrainz lists those
+    parents in no meaningful order.  Prefer the parent whose title really
+    prefixes this work's title, then one that numbers this work as one of
+    its parts, then one typed as a multi-movement container.
+
+    Only the fields MusicBrainz inlines on the parent stub can be used;
+    scoring an arrangement parent down would need its own relationships,
+    which would cost one request per candidate before the climb even
+    starts.
+    """
+    title = work.get("title") or ""
+
+    def score(rel):
+        parent = rel.get("work") or {}
+        if not parent.get("id"):
+            return None
+        parent_title = parent.get("title") or ""
+        value = 0
+        if parent_title and _strip_parent_title(title, parent_title) != title:
+            value += 3
+        if rel.get("ordering-key") is not None:
+            value += 2
+        if parent.get("type") in _CONTAINER_WORK_TYPES:
+            value += 1
+        return value
+
+    return _pick_rel(_work_rels(work, "parts", "backward"), score)
 
 
 def _composer_rels(work):
@@ -612,7 +676,10 @@ def _movement_groups(album, release):
 # ---------------------------------------------------------------------------
 
 _WORK_INC = "artist-rels+work-rels"
-_MAX_DEPTH = 4
+# The hierarchy is climbed to its top, so the usable levels (%L1%, %L2%, …)
+# follow the data.  This is only a backstop against runaway request chains
+# from absurdly deep hierarchies; cycles are caught separately.
+_MAX_DEPTH = 32
 
 
 def _complete_album_task(api, album, task_id):
@@ -766,9 +833,27 @@ def _apply_location(setting, metadata, recording_id, locations):
     _apply_people(setting, metadata, "location", entries)
 
 
+def _next_parent_id(document, chain):
+    """The work to climb to after document, or None at the end of the climb.
+
+    The climb ends at a work without a parent, at a work already in the
+    chain ('part of' cycles do occur in the data) or at the depth backstop.
+    document is expected to be the last entry of chain."""
+    if len(chain) >= _MAX_DEPTH:
+        return None
+    parent = _parent_rel(document)
+    if not parent:
+        return None
+    parent_id = parent["work"]["id"]
+    if any(doc.get("id") == parent_id for doc in chain):
+        return None
+    return parent_id
+
+
 def _resolve_chain(api, album, work_id, callback, _chain=None):
-    """Fetch work_id and climb 'part of' parents, then call callback(chain);
-    chain[0] is work_id's data, chain[-1] the topmost fetched work."""
+    """Fetch work_id and climb 'part of' parents to the top, then call
+    callback(chain); chain[0] is work_id's data, chain[-1] the topmost
+    fetched work."""
     chain = _chain if _chain is not None else []
 
     def _done(document):
@@ -776,9 +861,9 @@ def _resolve_chain(api, album, work_id, callback, _chain=None):
             callback(chain)
             return
         chain.append(document)
-        parent = _parent_rel(document)
-        if parent and len(chain) < _MAX_DEPTH:
-            _resolve_chain(api, album, parent["work"]["id"], callback, chain)
+        parent_id = _next_parent_id(document, chain)
+        if parent_id:
+            _resolve_chain(api, album, parent_id, callback, chain)
         else:
             callback(chain)
 
@@ -879,7 +964,7 @@ def _preview_sections(setting, release, track, get_work, use_genres=True):
         parent = _parent_rel(work)
         chain, missing = [], None
         work_id = parent["work"]["id"] if parent else work["id"]
-        while work_id and len(chain) < _MAX_DEPTH:
+        while work_id:
             known, doc = get_work(work_id)
             if not known:
                 missing = work_id
@@ -887,8 +972,7 @@ def _preview_sections(setting, release, track, get_work, use_genres=True):
             if doc is None:
                 break
             chain.append(doc)
-            parent_rel = _parent_rel(doc)
-            work_id = parent_rel["work"]["id"] if parent_rel else None
+            work_id = _next_parent_id(doc, chain)
         if missing:
             pending.append(missing)
             sections["work"] = "pending"
