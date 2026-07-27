@@ -12,6 +12,7 @@ list simply writes nothing.
 - [The options page](#the-options-page)
 - [Work hierarchy templates](#work-hierarchy-templates)
 - [Classical-or-not detection](#classical-or-not-detection)
+  - [Persisting the verdict](#persisting-the-verdict)
 - [Data quirks handled](#data-quirks-handled)
 - [Relationship to Classical Extras](#relationship-to-classical-extras)
   - [General approach](#general-approach)
@@ -96,7 +97,10 @@ The policy is evaluated separately for every tag in a destination list. The
 preview shows the generated values before the policy is applied because it does
 not have a loaded file's existing metadata to compare against.
 
-The individual sections are:
+The individual sections are, in the order they appear:
+
+**Classical detection** — see
+[Classical-or-not detection](#classical-or-not-detection) below.
 
 **Title, Artist, Album artist, Artists, Composer, Conductor, Orchestra**
 
@@ -166,6 +170,7 @@ part of a compilation work), one path is climbed, not both: the plugin
 prefers the parent whose title actually prefixes the work's title, then one
 that numbers the work as one of its parts, then one whose work type implies
 movements (symphony, opera, suite, …).
+
 - Ranges join several levels: `%top..L1{:: }%` renders top-down glued with
   `:: `; `%L2..top{; }%` renders bottom-up. Separator defaults to `; `.
   Direction follows the written order and levels that don't exist render as
@@ -193,9 +198,12 @@ the templates can't express is one `$set()` away in Options → Scripting.
 
 For libraries that mix classical with pop/rock or jazz, the optional
 **Classical detection** section decides per release whether the plugin
-tags it at all. MusicBrainz has no authoritative "this is classical"
-flag, so the decision is built from six signals, five of them computed
-from the release data the plugin already fetches (no extra requests):
+tags it at all. The one exception is the verdict itself, which can be
+written either way (see [Persisting the verdict](#persisting-the-verdict)).
+MusicBrainz has no authoritative "this is classical" flag, so the decision
+is built from six signals, five of them computed from the release data the
+plugin already fetches (no extra requests) and one read from the files
+themselves:
 
 - **Work has composer** — a performed work has a composer relationship.
 - **Conductor/orchestra** — a recording has a conductor or "performing
@@ -207,10 +215,10 @@ from the release data the plugin already fetches (no extra requests):
   genres from MusicBrainz" to be enabled in Picard's options; without it
   this signal is always "no").
 - **Multi-movement work** — a performed work is part of a larger work.
+- **Already tagged** — any file being added to the release already carries
+  the configured tag, as read from disk rather than from MusicBrainz.
 
-The sixth, **Already tagged**, is read from the files instead: it holds
-when any file being added to the release already carries the configured
-tag, as read from disk. The default is `is_classical` = `1`, which is what
+**Already tagged** defaults to `is_classical` = `1`, which is what
 Classical Extras writes for a release it considers classical, so a library
 it has tagged is recognised without configuration. An empty value matches
 any value of the tag, and several tags may be listed (`is_classical;
@@ -227,13 +235,16 @@ default rules are:
 | 2   | required          | —                   | required           | —               | —                   | —              |
 | 3   | —                 | —                   | —                  | required        | —                   | —              |
 
-With the section disabled (the default) every release is tagged.
-Either way the verdict is exported to Picard scripts as
+With the section disabled (the default) nothing is detected at all: no
+signals are read, no rules are evaluated, every release is tagged, and
+neither the variables below nor the marker tag are written or removed.
+
+With it enabled, the verdict is exported to Picard scripts as
 `%_sc_classical%` (`1`/`0`) and every signal as `%_sc_sig_composer%`,
 `%_sc_sig_conductor_orchestra%`, `%_sc_sig_composer_in_credit%`,
-`%_sc_sig_genre%`, `%_sc_sig_multi_movement%` and `%_sc_sig_tagged%`. The
-work-hierarchy `%_sc_...%` variables are also still exported for releases
-the gate skips.
+`%_sc_sig_genre%`, `%_sc_sig_multi_movement%` and `%_sc_sig_tagged%`,
+whichever way it went. The work-hierarchy `%_sc_...%` variables are
+exported for every release, including the ones the gate skips.
 
 The preview on the options page shows, for the loaded release, each
 signal's value and which rule (if any) matched and evaluated live with the
@@ -251,8 +262,8 @@ MusicBrainz data is too thin for the other signals. Add a rule with
 **Already tagged** set to _required_ to switch that on; no default rule
 uses it.
 
-The verdict is written whatever the gate decides, so a release ruled out
-gets the **Value when not classical** marker rather than nothing at all.
+While the section is enabled the verdict is written whatever it decides,
+so a release ruled out gets the **Value when not classical** marker.
 That value is empty by default, and empty means _the tag does not belong
 on this file_: the plugin then removes it. Naming a target tag hands it to
 the plugin, which keeps it in step with the verdict in both directions —
@@ -344,20 +355,20 @@ Other differences in approach:
 
 ### Shared functionality
 
-| Functionality                               | Simple Classical                                                                                                       | Classical Extras                                                                                                            | Compatibility                                                                                                                                                                            |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Work/movement from the MB work hierarchy    | Templates (`%L1%`, `%top%`, ranges), unlimited levels, per-depth overrides                                             | Unlimited levels; three naming styles: MB canonical, track-title text, or canonical enhanced with title text                | Both default to a `::`-separated multi-level work value; names differ where Classical Extras' default "extended" style appends `{title text}`                                            |
-| Movement titles relative to the parent work | Strips the parent title and leading punctuation                                                                        | Also strips repeated text elsewhere in the title, with similarity thresholds and synonym lists                              | Same result on well-formed MB titles; Classical Extras cleans up inconsistent data more aggressively                                                                                     |
-| Movement numbering                          | Counts tracks within the parent work per disc; split movements numbered separately                                     | Same semantics, with additional rules for interleaved works                                                                 | Both write `movement`, `movementnumber`, `movementtotal` by default                                                                                                                      |
-| Partial performances                        | Suffix on the movement, default `: (part)`                                                                             | Notional sub-part with suffix, default ` (part)`                                                                            | Same concept, slightly different default text                                                                                                                                            |
-| Apple Music work display                    | `showmovement` = 1                                                                                                     | "show work movement" = 1                                                                                                    | Same                                                                                                                                                                                     |
-| Composer, conductor, orchestra              | Dedicated sections; canonical, as-credited and sort names; multi-value split option                                    | Part of a wider artist engine with per-context credited-as, aliases and ensemble detection by name lists                    | Default `composer`/`composersort`/`conductor` tags line up; for the orchestra this plugin writes `ensemble`/`performer:orchestra` by default, Classical Extras leaves the mapping to you |
-| Artist / album artist adjustment            | Per-role keep/remove/add rules applied to the release credit                                                           | Recording-artist replace/merge options; can prefix the _album title_ with composer last names                               | Different mechanisms, compare output before assuming parity                                                                                                                              |
-| Key                                         | The work's Key attribute, nearest level that has one                                                                   | Keys from all levels, optionally embedded into work names                                                                   | Equivalent for the common single-key case                                                                                                                                                |
-| Composition dates                           | Composer-relationship span, e.g. `1822-1824` + suffix                                                                  | Composed/published/premiered dates, plus period names derived from a period map                                             | This plugin covers the "composed dates" subset                                                                                                                                           |
-| Arrangements                                | A recording linked to both an original and an arrangement resolves to the original                                     | The arranged work becomes a pseudo-parent; arrangement names get a prefix                                                   | Different philosophy: pick one work vs. represent the relationship                                                                                                                       |
-| Existing-tag handling                       | Per-section policy: replace, append, merge, or only-if-empty                                                           | Tag map appends, per-line "Conditional?" writes only if blank; can preserve pre-existing file tags                          | Similar capability                                                                                                                                                                       |
-| Script variables                            | `%_sc_l1%`…, `%_sc_top%`, `%_sc_depth%`, `%_sc_partial%`                                                               | The full `_cwp_*`/`_cea_*` set (dozens of variables)                                                                        | Scripts are **not** portable: names differ and this plugin exports far less                                                                                                              |
+| Functionality                               | Simple Classical                                                                                                                                                           | Classical Extras                                                                                                            | Compatibility                                                                                                                                                                            |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work/movement from the MB work hierarchy    | Templates (`%L1%`, `%top%`, ranges), unlimited levels, per-depth overrides                                                                                                 | Unlimited levels; three naming styles: MB canonical, track-title text, or canonical enhanced with title text                | Both default to a `::`-separated multi-level work value; names differ where Classical Extras' default "extended" style appends `{title text}`                                            |
+| Movement titles relative to the parent work | Strips the parent title and leading punctuation                                                                                                                            | Also strips repeated text elsewhere in the title, with similarity thresholds and synonym lists                              | Same result on well-formed MB titles; Classical Extras cleans up inconsistent data more aggressively                                                                                     |
+| Movement numbering                          | Counts tracks within the parent work per disc; split movements numbered separately                                                                                         | Same semantics, with additional rules for interleaved works                                                                 | Both write `movement`, `movementnumber`, `movementtotal` by default                                                                                                                      |
+| Partial performances                        | Suffix on the movement, default `: (part)`                                                                                                                                 | Notional sub-part with suffix, default ` (part)`                                                                            | Same concept, slightly different default text                                                                                                                                            |
+| Apple Music work display                    | `showmovement` = 1                                                                                                                                                         | "show work movement" = 1                                                                                                    | Same                                                                                                                                                                                     |
+| Composer, conductor, orchestra              | Dedicated sections; canonical, as-credited and sort names; multi-value split option                                                                                        | Part of a wider artist engine with per-context credited-as, aliases and ensemble detection by name lists                    | Default `composer`/`composersort`/`conductor` tags line up; for the orchestra this plugin writes `ensemble`/`performer:orchestra` by default, Classical Extras leaves the mapping to you |
+| Artist / album artist adjustment            | Per-role keep/remove/add rules applied to the release credit                                                                                                               | Recording-artist replace/merge options; can prefix the _album title_ with composer last names                               | Different mechanisms, compare output before assuming parity                                                                                                                              |
+| Key                                         | The work's Key attribute, nearest level that has one                                                                                                                       | Keys from all levels, optionally embedded into work names                                                                   | Equivalent for the common single-key case                                                                                                                                                |
+| Composition dates                           | Composer-relationship span, e.g. `1822-1824` + suffix                                                                                                                      | Composed/published/premiered dates, plus period names derived from a period map                                             | This plugin covers the "composed dates" subset                                                                                                                                           |
+| Arrangements                                | A recording linked to both an original and an arrangement resolves to the original                                                                                         | The arranged work becomes a pseudo-parent; arrangement names get a prefix                                                   | Different philosophy: pick one work vs. represent the relationship                                                                                                                       |
+| Existing-tag handling                       | Per-section policy: replace, append, merge, or only-if-empty                                                                                                               | Tag map appends, per-line "Conditional?" writes only if blank; can preserve pre-existing file tags                          | Similar capability                                                                                                                                                                       |
+| Script variables                            | `%_sc_l1%`…, `%_sc_top%`, `%_sc_depth%`, `%_sc_partial%`                                                                                                                   | The full `_cwp_*`/`_cea_*` set (dozens of variables)                                                                        | Scripts are **not** portable: names differ and this plugin exports far less                                                                                                              |
 | Classical-or-not detection                  | User-defined rules over relationship/genre signals and an existing tag gate all tagging per release; verdict exported as `%_sc_classical%` and optionally written to a tag | Genre lists, artist-equals-composer style rule, Muso composer roster; feeds genre/period tags rather than gating the plugin | Different mechanisms and purposes, compare before relying on parity                                                                                                                      |
 
 ### Only in Simple Classical

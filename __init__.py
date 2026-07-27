@@ -1127,7 +1127,13 @@ def _match_classical_rule(rules, signals):
 
 
 def _start_album(setting, album, release_node):
-    """Reset the per-load coordinator (track count, signals, finishers)."""
+    """Reset the per-load coordinator (track count, signals, finishers).
+
+    A disabled section detects nothing at all: the signals are left unread,
+    which leaves no verdict to gate with, to export or to persist.  Reading
+    them here rather than at decide time also keeps one album load
+    consistent if the option is toggled while it runs.
+    """
     expected = 0
     for medium in release_node.get("media") or []:
         expected += len(medium.get("tracks") or [])
@@ -1137,15 +1143,19 @@ def _start_album(setting, album, release_node):
     coord = {
         "expected": expected,
         "done": 0,
-        "signals": _classical_signals(
-            release_node,
-            _release_roles(album, release_node),
-            _genre_keywords(setting),
-            tagged=_files_carry_tag(
-                album,
-                setting["classical_detect_tag"],
-                setting["classical_detect_value"],
-            ),
+        "signals": (
+            _classical_signals(
+                release_node,
+                _release_roles(album, release_node),
+                _genre_keywords(setting),
+                tagged=_files_carry_tag(
+                    album,
+                    setting["classical_detect_tag"],
+                    setting["classical_detect_value"],
+                ),
+            )
+            if setting["classical_enabled"]
+            else None
         ),
         "finishers": [],
         "decided": None,
@@ -1155,12 +1165,21 @@ def _start_album(setting, album, release_node):
 
 
 def _decide_album(setting, coord, logger=None):
-    rule = _match_classical_rule(_classical_rules(setting, logger), coord["signals"])
-    verdict = rule is not None
-    write = verdict or not setting["classical_enabled"]
-    coord["decided"] = (write, verdict)
+    """Decide the release's verdict once, then release every finisher.
+
+    A verdict of None means nothing was detected, so nothing is gated and
+    neither the script variables nor the marker tag are written.
+    """
+    if coord["signals"] is None:
+        coord["decided"] = (True, None)
+    else:
+        rule = _match_classical_rule(
+            _classical_rules(setting, logger), coord["signals"]
+        )
+        verdict = rule is not None
+        coord["decided"] = (verdict, verdict)
     for finisher in coord["finishers"]:
-        finisher(write, verdict)
+        finisher(*coord["decided"])
     coord["finishers"] = []
 
 
@@ -1900,10 +1919,11 @@ class SimpleClassicalOptionsPage(OptionsPage):
                 "release counts as classical if any rule row matches, and a "
                 "row matches when every signal set to 'required' holds and "
                 "none set to 'must not hold' does. With this section "
-                "disabled every release is tagged. The verdict is always "
-                "exported to Picard scripts as %_sc_classical% (single "
-                "signals as %_sc_sig_...%). The genre signal needs 'Use "
-                "genres from MusicBrainz' enabled in Picard's options.",
+                "disabled nothing is detected: every release is tagged, and "
+                "no verdict is exported or written. While it is enabled the "
+                "verdict is exported to Picard scripts as %_sc_classical% "
+                "(single signals as %_sc_sig_...%). The genre signal needs "
+                "'Use genres from MusicBrainz' enabled in Picard's options.",
             ),
         )
         self._text_row(

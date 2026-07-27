@@ -105,7 +105,7 @@
 "work.remove_selected" = "Remove selected"
 
 "section.classical.label" = "Classical detection"
-"section.classical.note" = "Decides per release whether the plugin tags it at all: the release counts as classical if any rule row matches, and a row matches when every signal set to 'required' holds and none set to 'must not hold' does. With this section disabled every release is tagged. The verdict is always exported to Picard scripts as %_sc_classical% (single signals as %_sc_sig_...%). The genre signal needs 'Use genres from MusicBrainz' enabled in Picard's options."
+"section.classical.note" = "Decides per release whether the plugin tags it at all: the release counts as classical if any rule row matches, and a row matches when every signal set to 'required' holds and none set to 'must not hold' does. With this section disabled nothing is detected: every release is tagged, and no verdict is exported or written. While it is enabled the verdict is exported to Picard scripts as %_sc_classical% (single signals as %_sc_sig_...%). The genre signal needs 'Use genres from MusicBrainz' enabled in Picard's options."
 "classical.genres" = "Genre keywords:"
 "classical.detect_tag" = "Detect from tag:"
 "classical.detect_value" = "Detect tag value:"

@@ -105,7 +105,7 @@
 "work.remove_selected" = "Ausgewählte entfernen"
 
 "section.classical.label" = "Klassik-Erkennung"
-"section.classical.note" = "Entscheidet pro Veröffentlichung, ob das Plugin sie überhaupt taggt: die Veröffentlichung gilt als Klassik, wenn eine der Regelzeilen zutrifft; eine Zeile trifft zu, wenn jedes auf „erforderlich“ gesetzte Signal vorliegt und keines der auf „darf nicht“ gesetzten. Ist dieser Abschnitt deaktiviert, wird jede Veröffentlichung getaggt. Das Ergebnis wird immer als %_sc_classical% an Picard-Skripte exportiert (einzelne Signale als %_sc_sig_...%). Das Genre-Signal benötigt „Genres von MusicBrainz verwenden“ in den Picard-Optionen."
+"section.classical.note" = "Entscheidet pro Veröffentlichung, ob das Plugin sie überhaupt taggt: die Veröffentlichung gilt als Klassik, wenn eine der Regelzeilen zutrifft; eine Zeile trifft zu, wenn jedes auf „erforderlich“ gesetzte Signal vorliegt und keines der auf „darf nicht“ gesetzten. Ist dieser Abschnitt deaktiviert, findet keine Erkennung statt: jede Veröffentlichung wird getaggt, und es wird kein Ergebnis exportiert oder geschrieben. Ist er aktiviert, wird das Ergebnis als %_sc_classical% an Picard-Skripte exportiert (einzelne Signale als %_sc_sig_...%). Das Genre-Signal benötigt „Genres von MusicBrainz verwenden“ in den Picard-Optionen."
 "classical.genres" = "Genre-Stichwörter:"
 "classical.detect_tag" = "Erkennen an Tag:"
 "classical.detect_value" = "Tag-Wert zum Erkennen:"
