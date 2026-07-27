@@ -67,9 +67,8 @@ Symphony no. 9, last track:
 
 Options → Plugins → Simple Classical. A Preview box at the top
 takes a MusicBrainz release URL or MBID: pick a track and every section
-shows, in place, the values it produces — recomputed live as you change
-any option, before saving. (Values are shown even for disabled sections,
-so you can see what enabling one would do.)
+shows a live previewr of the values it produces.
+(Values are shown even for disabled sections, so you can see what enabling one would do.)
 
 The **Tagging preset** box can populate all output tag fields for:
 
@@ -99,44 +98,45 @@ not have a loaded file's existing metadata to compare against.
 
 The individual sections are:
 
-- **Title, Artist, Album artist, Artists, Composer, Conductor, Orchestra** —
-  every section has "Write canonical to" / "Write credited to" / "Write sort
-  to" tag lists (separate multiple tag names with `;`; empty = don't write)
-  and a "Split into multiple values" checkbox.
-  - _Canonical vs credited_: canonical is the artist's full MusicBrainz name
-    ("Herbert von Karajan"), credited is the name as printed on the release
-    ("Karajan"). Sort tags always use the canonical sort name — MusicBrainz
-    has no as-credited sort names. For Title, canonical is the recording
-    title and credited the track title.
-  - _Split off_ keeps collaborations as one value using the credit's own
-    join phrases ("A & B", "A feat. B"); where removing the composer breaks
-    adjacency, artists are joined with `; `.
-  - Artist/Album artist start from the release credit and apply a
-    configurable rule per role — Composer, Conductor, Orchestra — each set
-    to _Keep as credited_, _Remove if present_ or _Add if missing_
-    (default: composers removed, everything else kept). Roles are matched
-    via the relationships: composers of the performed works, conductors
-    and performing orchestras of the recordings. The section's write
-    policy decides whether generated values replace or coexist with Picard's
-    values; soloists and other performers in the credit are always kept as-is.
-    Artists is the full credit.
-  - Conductor, Orchestra and Composer come from the recording/work
-    relationships and default to the tags players actually read: the
-    standard `composer`/`composersort` and `conductor`, and — for the
-    orchestra — `ensemble` (the classical tag understood by MPD, Roon and
-    Squeezebox) plus `performer:orchestra`, Picard's own tag for the
-    relationship. The conductor sort name additionally goes to the custom
-    `conductorsort`. These sections replace Picard's values by default; choose
-    another write policy to append, merge or preserve existing values.
-  - Recording location (default tag `location`, the classical Vorbis
-    field also supported by MPD) is the recording's "recorded at" place —
-    relevant e.g. for organ recordings, where the venue identifies the
-    instrument. Where no place is linked, an optional fallback (off by
-    default) uses the "recorded in" area instead; areas are often just a
-    city or country, so leaving it off writes the tag only for actual
-    venues. Picard's release data does not include place relationships,
-    so the plugin loads them with one extra MusicBrainz request per album
-    (per 100 recordings).
+**Title, Artist, Album artist, Artists, Composer, Conductor, Orchestra**
+
+Every section has "Write canonical to" / "Write credited to" / "Write sort
+to" tag lists (separate multiple tag names with `;`; empty = don't write)
+and a "Split into multiple values" checkbox.
+
+- _Canonical vs credited_: canonical is the artist's full MusicBrainz name
+  ("Herbert von Karajan"), credited is the name as printed on the release
+  ("Karajan"). Sort tags always use the canonical sort name. For Title,
+  canonical is the recording title and credited the track title.
+- _Split off_ keeps collaborations as one value using the credit's own
+  join phrases ("A & B", "A feat. B"); where removing the composer breaks
+  adjacency, artists are joined with `; `.
+- Artist/Album artist start from the release credit and apply a
+  configurable rule (_Keep as credited_, _Remove if present_ or _Add if missing_)
+  per role (Composer, Conductor, Orchestra) (default: composers removed,
+  everything else kept). Roles are matched via the relationships:
+  composers of the performed works, conductors and performing orchestras of
+  the recordings. The section's write policy decides whether generated values
+  replace or coexist with Picard's values; soloists and other performers
+  in the credit are always kept as-is.
+- Conductor, Orchestra and Composer come from the recording/work
+  relationships and default to the tags players actually read: the
+  standard `composer`/`composersort` and `conductor`, for the
+  orchestra, `ensemble` (the classical tag understood by MPD, Roon and
+  Squeezebox) plus `performer:orchestra` is used.
+  The conductor sort name additionally goes to the custom
+  `conductorsort`. These sections replace Picard's values by default; choose
+  another write policy to append, merge or preserve existing values.
+- Recording location (default tag `location`, the classical Vorbis
+  field also supported by MPD) is the recording's "recorded at" place,
+  where the venue identifies the instrument (i.e. for organ recordings)
+  or is otherwise relevant. Where no place is linked,
+  an optional fallback (off by default) uses the "recorded in" area instead;
+  areas are often just a city or country, so leaving it off writes the tag
+  only for actual venues.
+  Picard's release data does not include place relationships,
+  so the plugin loads them with one extra MusicBrainz request per album
+  (per 100 recordings).
 - **Recording date** — session dates from the performance relationship or
   the "recorded at"/"recorded in" relationships, whichever span is more
   precise (the performance relationship wins ties); first day, last day
@@ -156,7 +156,7 @@ hierarchy (each work fetched once per album, cached) and renders three
 values through templates:
 
 - `%L1%`: the performed work (deepest level), title relative to its parent
-- `%L2%`, `%L3%`, etc. refer parents and `%top%` the topmost work (full title)
+- `%L2%`, `%L3%`, etc. refer parents, and `%top%` the topmost work (full title)
 - Ranges join several levels: `%top..L1{:: }%` renders top-down glued with
   `:: `; `%L2..top{; }%` renders bottom-up. Separator defaults to `; `.
   Direction follows the written order and levels that don't exist render as
@@ -200,7 +200,7 @@ release data the plugin already fetches (no extra requests):
 - **Multi-movement work** — a performed work is part of a larger work.
 
 The signals are combined in a rules table: the release counts as
-classical if **any row** matches, and a row matches when every signal
+classical if any row matches, and a row matches when every signal
 set to _required_ holds and none set to _must not hold_ does. The
 default rules are:
 
