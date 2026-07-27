@@ -224,16 +224,37 @@ it has tagged is recognised without configuration. An empty value matches
 any value of the tag, and several tags may be listed (`is_classical;
 classical`). See [Persisting the verdict](#persisting-the-verdict) below.
 
-The signals are combined in a rules table: the release counts as
-classical if any row matches, and a row matches when every signal
-set to _required_ holds and none set to _must not hold_ does. The
-default rules are:
+Two of Picard's own settings decide whether the signals can be read at
+all, both under Options → Metadata. Without **Use track and release
+relationships** the release comes back with no relationships, so the four
+signals that read them are unknown rather than false; without **Use genres
+from MusicBrainz** the same goes for the genre. A rule naming an unknown
+signal cannot be judged and is skipped, and if that leaves no rule to
+judge with, the plugin makes no verdict at all: nothing is gated,
+every release is tagged, and no marker is written.
+
+The signals are combined in a rules table: something counts as classical
+if any row matches, and a row matches when every signal set to _required_
+holds and none set to _must not hold_ does. The default rules are:
 
 | #   | Work has composer | Conductor/orchestra | Composer in credit | Classical genre | Multi-movement work | Already tagged |
 | --- | ----------------- | ------------------- | ------------------ | --------------- | ------------------- | -------------- |
 | 1   | required          | required            | —                  | —               | —                   | —              |
 | 2   | required          | —                   | required           | —               | —                   | —              |
 | 3   | —                 | —                   | —                  | required        | —                   | —              |
+
+**Judge** decides what those rules are applied to. _Each track on its own_
+(the default) judges every track from its own recording and work, so a
+mixed box set tags only the classical part of it and leaves the rest
+alone. _The release as a whole_ restores the older behaviour of one
+verdict for everything.
+
+Two signals cannot be split per track. The genre belongs to the release,
+so every track inherits it. And **Already tagged** places a file by the
+MusicBrainz ids it carries (`musicbrainz_trackid`, `musicbrainz_recordingid`),
+because Picard only matches files to tracks after the plugin has run.
+The album's own tags (the album artist) always follow the release-wide
+verdict, since there is nothing per-track about them.
 
 With the section disabled (the default) nothing is detected at all: no
 signals are read, no rules are evaluated, every release is tagged, and
@@ -246,11 +267,13 @@ With it enabled, the verdict is exported to Picard scripts as
 whichever way it went. The work-hierarchy `%_sc_...%` variables are
 exported for every release, including the ones the gate skips.
 
-The preview on the options page shows, for the loaded release, each
-signal's value and which rule (if any) matched and evaluated live with the
-current, unsaved rules. **Already tagged** is the one signal it cannot
-show: a preview has no files behind it, so it reads as "not checked"
-there and only takes effect on a real scan.
+The preview on the options page shows, for the selected track, each
+signal's value and which rule (if any) matched, evaluated live with the
+current, unsaved rules. It follows the **Judge** setting, so per track it
+shows that track's own signals. Signals Picard is not fetching read as
+"unknown". **Already tagged** is the one signal it cannot show at all:
+a preview has no files behind it, so it reads as "not checked" and only
+takes effect on a real scan.
 
 ### Persisting the verdict
 

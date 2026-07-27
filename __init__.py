@@ -56,6 +56,13 @@ _CLASSICAL_SIGNALS = (
     "tagged",
 )
 
+# Signals read from relationships, which Picard only fetches with 'Use track
+# and release relationships' enabled.  Without it they are not false, they
+# are unknown, and a rule naming one cannot be judged at all.
+_RELATIONSHIP_SIGNALS = frozenset(
+    {"composer", "conductor_orchestra", "composer_in_credit", "multi_movement"}
+)
+
 _DEFAULT_CLASSICAL_RULES = json.dumps(
     [
         {"composer": "require", "conductor_orchestra": "require"},
@@ -77,6 +84,7 @@ _EXTRA_DEFAULTS = [
     ("location_area_fallback", False),
     # classical detection; the gate is off by default (tag every release)
     ("classical_enabled", False),
+    ("classical_scope", "track"),
     ("classical_rules", _DEFAULT_CLASSICAL_RULES),
     (
         "classical_genres",
@@ -914,7 +922,9 @@ _MBID_RE = re.compile(
 )
 
 
-def _preview_sections(setting, release, track, get_work, use_genres=True):
+def _preview_sections(
+    setting, release, track, get_work, use_genres=True, unavailable=()
+):
     """Values every section would produce for one track, computed with the
     given (possibly unsaved) option values.
 
@@ -936,10 +946,22 @@ def _preview_sections(setting, release, track, get_work, use_genres=True):
     signals = _classical_signals(
         release, release_roles, _genre_keywords(setting), with_genres=use_genres
     )
+    if setting["classical_scope"] == "track":
+        # the preview shows one track, so under per-track scope it has to
+        # show that track's own signals rather than the release's
+        signals = _track_signals(
+            track, _credit_artist_ids(release), signals["genre"], False
+        )
+    # a rule naming a signal Picard is not fetching cannot be judged; with
+    # none left to judge, a real run makes no verdict at all
+    rules = _classical_rules(setting)
+    usable = [rule for rule in rules if not (set(unavailable) & set(rule))]
+    judged = not (rules and not usable)
     sections: dict[str, Any] = {
         "classical": {
             "signals": signals,
-            "rule": _match_classical_rule(_classical_rules(setting), signals),
+            "rule": _match_classical_rule(usable, signals) if judged else None,
+            "judged": judged,
         },
         "title": {
             "canonical": recording.get("title") or "",
@@ -1025,33 +1047,116 @@ def _genre_names(release):
     return names
 
 
-def _files_carry_tag(album, taglist, value):
-    """True if any file heading into this album already carries the tag.
+def _carries_tag(metadata, tags, wanted):
+    """True if metadata holds one of the tags, at the wanted value if given
+    (an empty value matches any non-empty one)."""
+    for tag in tags:
+        for item in metadata.getall(tag):
+            item = (item or "").strip()
+            if item and (not wanted or item.lower() == wanted):
+                return True
+    return False
 
-    Picard matches files to tracks only after every metadata processor has
-    run, so there is no per-track answer at detection time: until then the
-    pending files sit in the album's unmatched cluster, and reloading a
-    matched album sees the linked ones.  That is the release-wide question
-    the signals ask anyway.  orig_metadata is what the file holds on disk,
-    not what this session has already written to it.
 
-    An empty value matches any non-empty value of the tag.
+# The ids Picard writes for the track and the recording; a file that has
+# been tagged before names the track it belongs to through them.
+_FILE_ID_TAGS = ("musicbrainz_trackid", "musicbrainz_recordingid")
+
+
+def _tagged_files(album, taglist, value):
+    """Which files heading into this album already carry the marker tag.
+
+    Returns (ids, unplaceable): the MusicBrainz track and recording ids
+    those files name in their own tags, and whether any of them named none
+    at all.  Picard matches files to tracks only after every metadata
+    processor has run, so its own matching cannot be used here; going by
+    the ids the files already carry places them without it.  A marker file
+    without ids cannot be placed and counts for the whole release instead.
+
+    orig_metadata is what the file holds on disk, not what this session has
+    already written to it.
     """
     tags = _parse_taglist(taglist)
     iterfiles = getattr(album, "iterfiles", None)
     if not tags or iterfiles is None:
-        return False
+        return set(), False
     wanted = (value or "").strip().lower()
+    ids, unplaceable = set(), False
     for file in iterfiles():
         metadata = getattr(file, "orig_metadata", None)
-        if metadata is None:
+        if metadata is None or not _carries_tag(metadata, tags, wanted):
             continue
-        for tag in tags:
-            for item in metadata.getall(tag):
-                item = (item or "").strip()
-                if item and (not wanted or item.lower() == wanted):
-                    return True
-    return False
+        found = {
+            item.strip()
+            for tag in _FILE_ID_TAGS
+            for item in metadata.getall(tag)
+            if (item or "").strip()
+        }
+        if found:
+            ids |= found
+        else:
+            unplaceable = True
+    return ids, unplaceable
+
+
+def _unavailable_signals(global_setting):
+    """Signals whose source data Picard was not asked to fetch.
+
+    Both switches live in Picard's own Options > Metadata, and without them
+    the data never reaches the plugin, so the signals that read it say
+    nothing about the release either way.
+    """
+    unavailable = set()
+    if not global_setting["track_ars"]:
+        unavailable |= _RELATIONSHIP_SIGNALS
+    if not global_setting["use_genres"]:
+        unavailable.add("genre")
+    return frozenset(unavailable)
+
+
+def _credit_artist_ids(release):
+    return {credit["artist"]["id"] for credit in release.get("artist-credit") or []}
+
+
+def _track_signals(track, credit_ids, genre, tagged):
+    """The signals judged from one track's own recording and work.
+
+    'genre' is release-level (MusicBrainz has no per-track genres) and so is
+    passed down unchanged; 'tagged' is decided per track by the caller.
+    """
+    recording = track.get("recording") or {}
+    performance = _pick_performance(recording)
+    work = performance["work"] if performance else None
+    composer_ids = (
+        {entry["id"] for entry in _rel_entries(work, "artist", "composer")}
+        if work
+        else set()
+    )
+    return {
+        "composer": bool(composer_ids),
+        "conductor_orchestra": bool(
+            _rel_entries(recording, "artist", "conductor")
+            or _rel_entries(recording, "artist", "performing orchestra")
+        ),
+        "composer_in_credit": bool(credit_ids & composer_ids),
+        "genre": genre,
+        "multi_movement": bool(work and _parent_rel(work)),
+        "tagged": tagged,
+    }
+
+
+def _release_track_signals(release, genre, tagged_ids, unplaceable):
+    """{track id: signals}, each track judged on its own."""
+    credit_ids = _credit_artist_ids(release)
+    result = {}
+    for medium in release.get("media") or []:
+        for track in medium.get("tracks") or []:
+            recording = track.get("recording") or {}
+            own = {track.get("id"), recording.get("id")} - {None}
+            result[track.get("id")] = _track_signals(
+                track, credit_ids, genre, bool(own & tagged_ids) or unplaceable
+            )
+    return result
 
 
 def _classical_signals(release, roles, keywords, with_genres=True, tagged=False):
@@ -1062,9 +1167,7 @@ def _classical_signals(release, roles, keywords, with_genres=True, tagged=False)
     than from MusicBrainz, so it is passed in - the options preview has no
     files to look at and leaves it False.
     """
-    credit_ids = {
-        credit["artist"]["id"] for credit in release.get("artist-credit") or []
-    }
+    credit_ids = _credit_artist_ids(release)
     return {
         "composer": bool(roles["composer"]["ids"]),
         "conductor_orchestra": bool(
@@ -1126,13 +1229,17 @@ def _match_classical_rule(rules, signals):
 # album tasks, so all writes still land before the album finishes loading.
 
 
-def _start_album(setting, album, release_node):
+def _start_album(setting, album, release_node, unavailable=()):
     """Reset the per-load coordinator (track count, signals, finishers).
 
     A disabled section detects nothing at all: the signals are left unread,
     which leaves no verdict to gate with, to export or to persist.  Reading
     them here rather than at decide time also keeps one album load
     consistent if the option is toggled while it runs.
+
+    Per-track scope judges every track of the release on its own, computed
+    here because the release document holds them all; the release-wide
+    signals stay alongside for the album's own decisions.
     """
     expected = 0
     for medium in release_node.get("media") or []:
@@ -1140,70 +1247,117 @@ def _start_album(setting, album, release_node):
         expected += len(medium.get("data-tracks") or [])
         if medium.get("pregap"):
             expected += 1
+    signals = track_signals = None
+    if setting["classical_enabled"]:
+        tagged_ids, unplaceable = _tagged_files(
+            album,
+            setting["classical_detect_tag"],
+            setting["classical_detect_value"],
+        )
+        signals = _classical_signals(
+            release_node,
+            _release_roles(album, release_node),
+            _genre_keywords(setting),
+            tagged=bool(tagged_ids) or unplaceable,
+        )
+        if setting["classical_scope"] == "track":
+            track_signals = _release_track_signals(
+                release_node, signals["genre"], tagged_ids, unplaceable
+            )
     coord = {
         "expected": expected,
         "done": 0,
-        "signals": (
-            _classical_signals(
-                release_node,
-                _release_roles(album, release_node),
-                _genre_keywords(setting),
-                tagged=_files_carry_tag(
-                    album,
-                    setting["classical_detect_tag"],
-                    setting["classical_detect_value"],
-                ),
-            )
-            if setting["classical_enabled"]
-            else None
-        ),
+        "signals": signals,
+        "track_signals": track_signals,
+        "unavailable": frozenset(unavailable),
         "finishers": [],
         "decided": None,
+        "track_decided": None,
     }
     _album_cache(album)["coord"] = coord
     return coord
 
 
 def _decide_album(setting, coord, logger=None):
-    """Decide the release's verdict once, then release every finisher.
+    """Decide the verdicts once, then release every finisher.
 
-    A verdict of None means nothing was detected, so nothing is gated and
-    neither the script variables nor the marker tag are written.
+    A verdict of None means nothing was judged, so nothing is gated and
+    neither the script variables nor the marker tag are written.  That
+    covers a disabled section and, just as importantly, a ruleset that
+    cannot be evaluated because Picard never fetched the data it names:
+    calling such a release 'not classical' would gate all tagging away on
+    evidence the plugin never had.
     """
-    if coord["signals"] is None:
+    rules = _classical_rules(setting, logger) if coord["signals"] is not None else []
+    usable = [rule for rule in rules if not (coord["unavailable"] & set(rule))]
+    if coord["signals"] is None or (rules and not usable):
+        if rules and not usable and logger is not None:
+            logger.warning(
+                "classical detection: every rule needs a signal Picard did "
+                "not fetch (%s); no verdict is made and every release is "
+                "tagged",
+                ", ".join(sorted(coord["unavailable"])),
+            )
         coord["decided"] = (True, None)
     else:
-        rule = _match_classical_rule(
-            _classical_rules(setting, logger), coord["signals"]
-        )
-        verdict = rule is not None
-        coord["decided"] = (verdict, verdict)
-    for finisher in coord["finishers"]:
-        finisher(*coord["decided"])
+        coord["decided"] = _decision(usable, coord["signals"])
+        if coord["track_signals"] is not None:
+            coord["track_decided"] = {
+                track_id: _decision(usable, signals)
+                for track_id, signals in coord["track_signals"].items()
+            }
+    for finisher, track_id in coord["finishers"]:
+        finisher(*_decision_for(coord, track_id))
     coord["finishers"] = []
 
 
-def _when_decided(setting, coord, finisher, track_done=False, logger=None):
-    """Run finisher(write, verdict) once the release's verdict is known.
+def _decision(rules, signals):
+    """(write, verdict) for one set of signals; the gate follows the verdict."""
+    verdict = _match_classical_rule(rules, signals) is not None
+    return (verdict, verdict)
 
-    Without a coordinator (no release node) tags are written unconditionally
-    and no verdict is available."""
+
+def _decision_for(coord, track_id):
+    """The decision that applies to one track, or the release's own."""
+    per_track = coord["track_decided"]
+    if per_track is not None and track_id in per_track:
+        return per_track[track_id]
+    return coord["decided"]
+
+
+def _signals_for(coord, track_id):
+    """The signals behind that decision, for the script variables."""
+    per_track = coord["track_signals"]
+    if per_track is not None and track_id in per_track:
+        return per_track[track_id]
+    return coord["signals"]
+
+
+def _when_decided(
+    setting, coord, finisher, track_done=False, logger=None, track_id=None
+):
+    """Run finisher(write, verdict) once the verdict that applies is known.
+
+    track_id picks the track's own verdict under per-track scope; the
+    release's is used for the album itself and whenever there is none.
+    Without a coordinator (no release node) tags are written
+    unconditionally and no verdict is available."""
     if coord is None:
         finisher(True, None)
         return
     if track_done:
         coord["done"] += 1
     if coord["decided"] is not None:
-        finisher(*coord["decided"])
+        finisher(*_decision_for(coord, track_id))
         return
-    coord["finishers"].append(finisher)
+    coord["finishers"].append((finisher, track_id))
     if coord["done"] >= coord["expected"]:
         _decide_album(setting, coord, logger)
 
 
-def _write_verdict_vars(metadata, coord, verdict):
+def _write_verdict_vars(metadata, signals, verdict):
     metadata["~sc_classical"] = "1" if verdict else "0"
-    for name, value in coord["signals"].items():
+    for name, value in signals.items():
         metadata["~sc_sig_" + name] = "1" if value else "0"
 
 
@@ -1242,11 +1396,17 @@ def process_album(api, album, metadata, release_node):
     if not api.global_config.setting["track_ars"]:
         api.logger.warning(
             "'Use track and release relationships' is disabled in "
-            "Options > Metadata; work and movement tags cannot be created."
+            "Options > Metadata; work and movement tags cannot be created, "
+            "and classical detection has no relationship data to judge from."
         )
     if release_node is None:
         return
-    coord = _start_album(setting, album, release_node)
+    coord = _start_album(
+        setting,
+        album,
+        release_node,
+        _unavailable_signals(api.global_config.setting),
+    )
     credits = release_node.get("artist-credit") or []
     entries = _adjust_credit(
         setting, "albumartist", credits, _release_roles(album, release_node)
@@ -1254,7 +1414,7 @@ def process_album(api, album, metadata, release_node):
 
     def finisher(write, verdict):
         if verdict is not None:
-            _write_verdict_vars(metadata, coord, verdict)
+            _write_verdict_vars(metadata, coord["signals"], verdict)
         if write:
             _apply_people(setting, metadata, "albumartist", entries)
 
@@ -1315,7 +1475,9 @@ def process_track(api, track, metadata, track_node, release_node=None):
 
     def finisher(write, verdict):
         if verdict is not None:
-            _write_verdict_vars(metadata, coord, verdict)
+            _write_verdict_vars(
+                metadata, _signals_for(coord, track_node.get("id")), verdict
+            )
             _write_classical_tag(setting, metadata, verdict)
         values = None
         if results["chain"] is not None:
@@ -1366,7 +1528,14 @@ def process_track(api, track, metadata, track_node, release_node=None):
     def step_done(*_args):
         pending["count"] -= 1
         if pending["count"] == 0:
-            _when_decided(setting, coord, finisher, track_done=True, logger=api.logger)
+            _when_decided(
+                setting,
+                coord,
+                finisher,
+                track_done=True,
+                logger=api.logger,
+                track_id=track_node.get("id"),
+            )
 
     if need_locations:
         pending["count"] += 1
@@ -1660,6 +1829,11 @@ _RULE_CELL_MODES = [
     ("exclude", "classical.cell.exclude", "must not hold"),
 ]
 
+_CLASSICAL_SCOPES = [
+    ("track", "scope.track", "Each track on its own"),
+    ("release", "scope.release", "The release as a whole"),
+]
+
 _CLASSICAL_SIGNAL_LABELS = {
     "composer": "Work has composer",
     "conductor_orchestra": "Conductor/orchestra",
@@ -1924,6 +2098,25 @@ class SimpleClassicalOptionsPage(OptionsPage):
                 "verdict is exported to Picard scripts as %_sc_classical% "
                 "(single signals as %_sc_sig_...%). The genre signal needs "
                 "'Use genres from MusicBrainz' enabled in Picard's options.",
+            ),
+        )
+        self._mode_row(
+            form,
+            tr("classical.scope", "Judge:"),
+            "classical_scope",
+            _CLASSICAL_SCOPES,
+        )
+        self._note_row(
+            form,
+            tr(
+                "classical.scope_note",
+                "Per track, each track is judged on its own recording and "
+                "work, so a mixed box set tags only the classical part of "
+                "it. Two signals cannot be split that way: the genre is a "
+                "property of the release, and a file only counts towards "
+                "its own track if it carries MusicBrainz ids (which files "
+                "tagged by Picard before do) — one that does not counts for "
+                "the whole release, as it did before.",
             ),
         )
         self._text_row(
@@ -2418,8 +2611,16 @@ class SimpleClassicalOptionsPage(OptionsPage):
         medium_index, track_index = position
         track = release["media"][medium_index]["tracks"][track_index]
         use_genres = bool(self.api.global_config.setting["use_genres"])
+        # the preview always fetches relationships, but a real run only has
+        # them when Picard is set to, so it is shown the way a run would see it
+        unavailable = _unavailable_signals(self.api.global_config.setting)
         sections, pending = _preview_sections(
-            self._ui_settings(), release, track, self._preview_get_work, use_genres
+            self._ui_settings(),
+            release,
+            track,
+            self._preview_get_work,
+            use_genres,
+            unavailable,
         )
         for work_id in pending:
             self._fetch_preview_work(work_id)
@@ -2432,7 +2633,13 @@ class SimpleClassicalOptionsPage(OptionsPage):
 
         info = sections.get("classical")
         if info:
-            if info["rule"] is not None:
+            if not info["judged"]:
+                verdict = tr(
+                    "preview.classical_unjudged",
+                    "No verdict — every rule needs a signal Picard is not "
+                    "fetching, so nothing is gated",
+                )
+            elif info["rule"] is not None:
                 verdict = tr("preview.classical_yes", "Classical — rule %d matched") % (
                     info["rule"] + 1
                 )
@@ -2443,9 +2650,10 @@ class SimpleClassicalOptionsPage(OptionsPage):
             classical_rows = [("", verdict)]
             for signal in _CLASSICAL_SIGNALS:
                 value = yes if info["signals"][signal] else no
-                if signal == "genre" and not use_genres:
+                if signal in unavailable:
                     value = tr(
-                        "preview.genre_disabled", "no (genres are disabled in Picard)"
+                        "preview.signal_unavailable",
+                        "unknown (Picard is not fetching this data)",
                     )
                 elif signal == "tagged":
                     value = tr(
