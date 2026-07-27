@@ -194,8 +194,8 @@ the templates can't express is one `$set()` away in Options → Scripting.
 For libraries that mix classical with pop/rock or jazz, the optional
 **Classical detection** section decides per release whether the plugin
 tags it at all. MusicBrainz has no authoritative "this is classical"
-flag, so the decision is built from five signals, all computed from the
-release data the plugin already fetches (no extra requests):
+flag, so the decision is built from six signals, five of them computed
+from the release data the plugin already fetches (no extra requests):
 
 - **Work has composer** — a performed work has a composer relationship.
 - **Conductor/orchestra** — a recording has a conductor or "performing
@@ -208,28 +208,81 @@ release data the plugin already fetches (no extra requests):
   this signal is always "no").
 - **Multi-movement work** — a performed work is part of a larger work.
 
+The sixth, **Already tagged**, is read from the files instead: it holds
+when any file being added to the release already carries the configured
+tag, as read from disk. The default is `is_classical` = `1`, which is what
+Classical Extras writes for a release it considers classical, so a library
+it has tagged is recognised without configuration. An empty value matches
+any value of the tag, and several tags may be listed (`is_classical;
+classical`). See [Persisting the verdict](#persisting-the-verdict) below.
+
 The signals are combined in a rules table: the release counts as
 classical if any row matches, and a row matches when every signal
 set to _required_ holds and none set to _must not hold_ does. The
 default rules are:
 
-| #   | Work has composer | Conductor/orchestra | Composer in credit | Classical genre | Multi-movement work |
-| --- | ----------------- | ------------------- | ------------------ | --------------- | ------------------- |
-| 1   | required          | required            | —                  | —               | —                   |
-| 2   | required          | —                   | required           | —               | —                   |
-| 3   | —                 | —                   | —                  | required        | —                   |
+| #   | Work has composer | Conductor/orchestra | Composer in credit | Classical genre | Multi-movement work | Already tagged |
+| --- | ----------------- | ------------------- | ------------------ | --------------- | ------------------- | -------------- |
+| 1   | required          | required            | —                  | —               | —                   | —              |
+| 2   | required          | —                   | required           | —               | —                   | —              |
+| 3   | —                 | —                   | —                  | required        | —                   | —              |
 
 With the section disabled (the default) every release is tagged.
 Either way the verdict is exported to Picard scripts as
 `%_sc_classical%` (`1`/`0`) and every signal as `%_sc_sig_composer%`,
 `%_sc_sig_conductor_orchestra%`, `%_sc_sig_composer_in_credit%`,
-`%_sc_sig_genre%` and `%_sc_sig_multi_movement%`. The work-hierarchy
-`%_sc_...%` variables are also still exported for releases the gate
-skips.
+`%_sc_sig_genre%`, `%_sc_sig_multi_movement%` and `%_sc_sig_tagged%`. The
+work-hierarchy `%_sc_...%` variables are also still exported for releases
+the gate skips.
 
 The preview on the options page shows, for the loaded release, each
 signal's value and which rule (if any) matched and evaluated live with the
-current, unsaved rules.
+current, unsaved rules. **Already tagged** is the one signal it cannot
+show: a preview has no files behind it, so it reads as "not checked"
+there and only takes effect on a real scan.
+
+### Persisting the verdict
+
+The verdict can be written to a tag of its own (**Write verdict to**,
+empty by default, `1` when classical), which is what makes the **Already
+tagged** signal useful: a release detected once — or tagged by hand, or by
+another plugin — keeps being recognised on later runs, even if its
+MusicBrainz data is too thin for the other signals. Add a rule with
+**Already tagged** set to _required_ to switch that on; no default rule
+uses it.
+
+The verdict is written whatever the gate decides, so a release ruled out
+gets the **Value when not classical** marker rather than nothing at all.
+That value is empty by default, and empty means _the tag does not belong
+on this file_: the plugin then removes it. Naming a target tag hands it to
+the plugin, which keeps it in step with the verdict in both directions —
+set **Value when not classical** to something like `0` if you would rather
+have a marker than a removal.
+
+Detection and writing name their tags separately, so a library can be
+migrated in one pass: detect on `is_classical` = `1`, write `classical` =
+`true`, and once everything has been re-saved, point detection at the new
+tag. The same split is the way out of a wrong verdict — clear the
+**Already tagged** column in the rules, re-scan, and the decision comes
+from MusicBrainz data alone again.
+
+The removal is deliberate, because nothing else would do it: unless
+Options → Tags → **Clear existing tags** is on, Picard merges the tags it
+writes into the ones a file already has, so a marker no longer written
+would stay on disk and go on confirming itself. A tag listed under
+Options → Tags → **Preserve these tags** is the one case the plugin
+cannot touch, removal included.
+
+A marker left behind by an earlier setup is therefore only cleaned up on
+a release the plugin actually re-scans and you re-save; pointing **Write
+verdict to** at the old tag name for one pass is the way to sweep it.
+
+Setting **Write verdict to** to `is_classical` shares the tag with
+Classical Extras, which writes `is_classical` = `1` for a release it
+considers classical and never clears it again. Sharing means this plugin
+also removes that tag where its own rules say not classical, so let only
+one of the two own the tag if their verdicts can differ — writing to a
+separate name keeps both intact.
 
 So that the verdict is known before anything is written, the plugin
 defers all tag writing until the release's asynchronous data (work
@@ -305,7 +358,7 @@ Other differences in approach:
 | Arrangements                                | A recording linked to both an original and an arrangement resolves to the original                                     | The arranged work becomes a pseudo-parent; arrangement names get a prefix                                                   | Different philosophy: pick one work vs. represent the relationship                                                                                                                       |
 | Existing-tag handling                       | Per-section policy: replace, append, merge, or only-if-empty                                                           | Tag map appends, per-line "Conditional?" writes only if blank; can preserve pre-existing file tags                          | Similar capability                                                                                                                                                                       |
 | Script variables                            | `%_sc_l1%`…, `%_sc_top%`, `%_sc_depth%`, `%_sc_partial%`                                                               | The full `_cwp_*`/`_cea_*` set (dozens of variables)                                                                        | Scripts are **not** portable: names differ and this plugin exports far less                                                                                                              |
-| Classical-or-not detection                  | User-defined rules over relationship/genre signals gate all tagging per release; verdict exported as `%_sc_classical%` | Genre lists, artist-equals-composer style rule, Muso composer roster; feeds genre/period tags rather than gating the plugin | Different mechanisms and purposes, compare before relying on parity                                                                                                                      |
+| Classical-or-not detection                  | User-defined rules over relationship/genre signals and an existing tag gate all tagging per release; verdict exported as `%_sc_classical%` and optionally written to a tag | Genre lists, artist-equals-composer style rule, Muso composer roster; feeds genre/period tags rather than gating the plugin | Different mechanisms and purposes, compare before relying on parity                                                                                                                      |
 
 ### Only in Simple Classical
 

@@ -11,8 +11,8 @@ source_locale = "en"
 long_description = """
 For every kind of data (title, artist, album artist, artists, composer,
 conductor, orchestra, recording location, work/movement hierarchy, key,
-composition year, recording date) you choose which tags it is written to - separately for
-canonical and as-credited names where both exist. Empty tag lists write
+composition year, recording date) you choose which tags it is written to (separately for
+canonical and as-credited names where both exist). Empty tag lists write
 nothing. The work hierarchy is rendered through small templates (%L1%,
 %top%, %top..L1{:: }%) with optional per-depth overrides, and all hierarchy
 levels are exported as %_sc_...% variables for Picard scripting. Each section
@@ -32,7 +32,7 @@ de = """
 Für jede Art von Daten (Titel, Interpret, Album-Interpret, Interpreten,
 Komponist, Dirigent, Orchester, Aufnahmeort, Werk-/Satzhierarchie, Tonart,
 Kompositionsjahr, Aufnahmedatum) wählen Sie, in welche Tags sie geschrieben
-werden - getrennt für kanonische und angegebene Namen, wo beide existieren.
+werden (getrennt für kanonische und angegebene Namen, wenn vorhanden).
 Leere Tag-Listen schreiben nichts. Die Werkhierarchie wird über kleine
 Vorlagen (%L1%, %top%, %top..L1{:: }%) mit optionalen Überschreibungen pro
 Tiefe ausgegeben, und alle Hierarchieebenen werden als %_sc_...%-Variablen

@@ -53,6 +53,7 @@ _CLASSICAL_SIGNALS = (
     "composer_in_credit",
     "genre",
     "multi_movement",
+    "tagged",
 )
 
 _DEFAULT_CLASSICAL_RULES = json.dumps(
@@ -83,6 +84,19 @@ _EXTRA_DEFAULTS = [
         "early music; medieval; renaissance; romanticism; impressionism; "
         "modern classical; contemporary classical; oratorio",
     ),
+    # the verdict as a real tag: written to persist it, read back as the
+    # 'tagged' signal.  Both sides name their tag separately so a library
+    # can be moved to another tag or value in one pass.
+    # 'is_classical' = 1 is what Classical Extras writes for a release it
+    # considers classical (its cwp_genres_flag_tag/_text defaults), so the
+    # detection side reads that out of the box
+    ("classical_detect_tag", "is_classical"),
+    ("classical_detect_value", "1"),
+    # off by default: naming a target makes the plugin own that tag, and
+    # owning it includes removing it again where the verdict says so
+    ("tag_classical", ""),
+    ("classical_value", "1"),
+    ("classical_negative_value", ""),
     # work & movement
     ("work_enabled", True),
     ("work_write_policy", "replace"),
@@ -1011,9 +1025,43 @@ def _genre_names(release):
     return names
 
 
-def _classical_signals(release, roles, keywords, with_genres=True):
+def _files_carry_tag(album, taglist, value):
+    """True if any file heading into this album already carries the tag.
+
+    Picard matches files to tracks only after every metadata processor has
+    run, so there is no per-track answer at detection time: until then the
+    pending files sit in the album's unmatched cluster, and reloading a
+    matched album sees the linked ones.  That is the release-wide question
+    the signals ask anyway.  orig_metadata is what the file holds on disk,
+    not what this session has already written to it.
+
+    An empty value matches any non-empty value of the tag.
+    """
+    tags = _parse_taglist(taglist)
+    iterfiles = getattr(album, "iterfiles", None)
+    if not tags or iterfiles is None:
+        return False
+    wanted = (value or "").strip().lower()
+    for file in iterfiles():
+        metadata = getattr(file, "orig_metadata", None)
+        if metadata is None:
+            continue
+        for tag in tags:
+            for item in metadata.getall(tag):
+                item = (item or "").strip()
+                if item and (not wanted or item.lower() == wanted):
+                    return True
+    return False
+
+
+def _classical_signals(release, roles, keywords, with_genres=True, tagged=False):
     """The per-release detection signals, all computed from the release
-    document (no extra requests)."""
+    document (no extra requests).
+
+    'tagged' is the exception: it comes from the files being matched rather
+    than from MusicBrainz, so it is passed in - the options preview has no
+    files to look at and leaves it False.
+    """
     credit_ids = {
         credit["artist"]["id"] for credit in release.get("artist-credit") or []
     }
@@ -1027,6 +1075,7 @@ def _classical_signals(release, roles, keywords, with_genres=True):
         "multi_movement": any(
             _parent_rel(work) for work in _iter_release_works(release)
         ),
+        "tagged": tagged,
     }
 
 
@@ -1092,6 +1141,11 @@ def _start_album(setting, album, release_node):
             release_node,
             _release_roles(album, release_node),
             _genre_keywords(setting),
+            tagged=_files_carry_tag(
+                album,
+                setting["classical_detect_tag"],
+                setting["classical_detect_value"],
+            ),
         ),
         "finishers": [],
         "decided": None,
@@ -1132,6 +1186,31 @@ def _write_verdict_vars(metadata, coord, verdict):
     metadata["~sc_classical"] = "1" if verdict else "0"
     for name, value in coord["signals"].items():
         metadata["~sc_sig_" + name] = "1" if value else "0"
+
+
+def _write_classical_tag(setting, metadata, verdict):
+    """Keep the marker tag in step with the verdict, so a later run can read
+    it back as the 'tagged' signal.
+
+    Written whatever the verdict decided about the other tags: a release
+    ruled out is exactly when the negative marker is worth having.  No value
+    configured for the verdict at hand means the tag should not be on the
+    file, and that has to be an explicit delete - unless 'Clear existing
+    tags' is on, Picard merges the tags it writes into the ones the file
+    already has, so a marker nobody writes any more would survive on disk
+    and keep confirming itself.
+    """
+    targets = _parse_taglist(setting["tag_classical"])
+    if not targets:
+        return
+    value = (
+        setting["classical_value"] if verdict else setting["classical_negative_value"]
+    )
+    for tag in targets:
+        if value:
+            metadata[tag] = value
+        else:
+            del metadata[tag]
 
 
 # ---------------------------------------------------------------------------
@@ -1218,6 +1297,7 @@ def process_track(api, track, metadata, track_node, release_node=None):
     def finisher(write, verdict):
         if verdict is not None:
             _write_verdict_vars(metadata, coord, verdict)
+            _write_classical_tag(setting, metadata, verdict)
         values = None
         if results["chain"] is not None:
             values = _work_values(
@@ -1567,6 +1647,7 @@ _CLASSICAL_SIGNAL_LABELS = {
     "composer_in_credit": "Composer in credit",
     "genre": "Classical genre",
     "multi_movement": "Multi-movement work",
+    "tagged": "Already tagged",
 }
 
 # sections with a "Write sort to" field; the preview shows no sort row for
@@ -1828,6 +1909,14 @@ class SimpleClassicalOptionsPage(OptionsPage):
         self._text_row(
             form, tr("classical.genres", "Genre keywords:"), "classical_genres"
         )
+        self._text_row(
+            form, tr("classical.detect_tag", "Detect from tag:"), "classical_detect_tag"
+        )
+        self._text_row(
+            form,
+            tr("classical.detect_value", "Detect tag value:"),
+            "classical_detect_value",
+        )
         self.rules_table = QtWidgets.QTableWidget(0, len(_CLASSICAL_SIGNALS))
         self.rules_table.setHorizontalHeaderLabels(
             [
@@ -1853,6 +1942,33 @@ class SimpleClassicalOptionsPage(OptionsPage):
         buttons.addWidget(remove_button)
         buttons.addStretch()
         form.addRow(buttons)
+        self._note_row(
+            form,
+            tr(
+                "classical.marker_note",
+                "Writing the verdict to a tag lets a later run pick it up "
+                "again through the 'already tagged' signal, together with "
+                "releases tagged by hand or by another plugin. Detection "
+                "and writing name their tag separately, so a library can be "
+                "moved to a new tag or value in one pass. An empty detect "
+                "value matches any value. Naming a target tag hands it to "
+                "the plugin: an empty value for a verdict means the tag "
+                "does not belong on the file and is removed from it. The "
+                "verdict is written even when this section gates all other "
+                "tags away.",
+            ),
+        )
+        self._text_row(
+            form, tr("classical.write_tag", "Write verdict to:"), "tag_classical"
+        )
+        self._text_row(
+            form, tr("classical.value", "Value when classical:"), "classical_value"
+        )
+        self._text_row(
+            form,
+            tr("classical.negative_value", "Value when not classical:"),
+            "classical_negative_value",
+        )
         self._preview_row(form, "classical")
 
     def _add_rule_row(self, values=None):
@@ -2310,6 +2426,11 @@ class SimpleClassicalOptionsPage(OptionsPage):
                 if signal == "genre" and not use_genres:
                     value = tr(
                         "preview.genre_disabled", "no (genres are disabled in Picard)"
+                    )
+                elif signal == "tagged":
+                    value = tr(
+                        "preview.tagged_unavailable",
+                        "not checked (the preview has no files)",
                     )
                 classical_rows.append(
                     (
