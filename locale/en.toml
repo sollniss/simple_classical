@@ -135,3 +135,62 @@
 "preview.classical_unjudged" = "No verdict — every rule needs a signal Picard is not fetching, so nothing is gated"
 "preview.signal_unavailable" = "unknown (Picard is not fetching this data)"
 "preview.tagged_unavailable" = "not checked (the preview has no files)"
+
+# Titles shown in Options > Profiles, for the rows the options page labels
+# with something other than a caption. Every other title is composed from the
+# section heading and the field label above.
+"option.enabled" = "Enabled"
+"option.role.composer" = "Composer role"
+"option.role.conductor" = "Conductor role"
+"option.role.orchestra" = "Orchestra role"
+"option.classical_rules" = "Detection rules"
+"option.depth_overrides" = "Depth overrides"
+"option.location_fallback" = "Area fallback"
+
+# Documentation of the script variables the plugin provides, shown in the
+# script editor's completer and under Options > Scripting.
+# {label}, {n}, {max} and {section} are filled in by the plugin and must
+# survive translation verbatim.
+"var.classical" = "Whether the release (or track) was judged classical: 1 or 0. Only set while classical detection is enabled."
+"var.signal" = "Classical-detection signal “{label}”: 1 when it holds, 0 when it does not."
+"var.depth" = "Number of levels in the performed work's hierarchy; 1 means a standalone work."
+"var.top" = "The topmost work of the hierarchy, the same value the %top% template token renders."
+"var.partial" = "1 when the recording is a partial performance of the work, 0 otherwise."
+"var.level" = "Level {n} of the work hierarchy: 1 is the performed work itself, higher numbers are its parents up to %_sc_top%. %_sc_depth% gives the number of levels a track has, at most {max}."
+"var.tag" = "Tag Simple Classical is configured to write the “{section}” section to. The tag name can be changed in Options > Plugins > Simple Classical."
+
+# What each tag the plugin writes actually contains, shown in the script
+# editor and under Options > Scripting.
+"var.tag.title_canonical" = "The recording's title."
+"var.tag.title_credited" = "The track title as printed on this release."
+"var.tag.artist_canonical" = "The track artists after the role rules are applied (composers are removed by default), under their canonical MusicBrainz names."
+"var.tag.artist_credited" = "The track artists after the role rules are applied, as credited on this release."
+"var.tag.artist_sort" = "The sort names of the track artists after the role rules are applied."
+"var.tag.albumartist_canonical" = "The release artists after the role rules are applied (composers are removed by default), under their canonical MusicBrainz names."
+"var.tag.albumartist_credited" = "The release artists after the role rules are applied, as credited on this release."
+"var.tag.albumartist_sort" = "The sort names of the release artists after the role rules are applied."
+"var.tag.artists_canonical" = "The full release credit including the composer, under their canonical MusicBrainz names."
+"var.tag.artists_credited" = "The full release credit including the composer, as credited on this release."
+"var.tag.artists_sort" = "The sort names of the full release credit, including the composer."
+"var.tag.composer_canonical" = "The composers of the performed work, under their canonical MusicBrainz names."
+"var.tag.composer_credited" = "The composers of the performed work, as credited on this release."
+"var.tag.composer_sort" = "The sort names of the composers of the performed work."
+"var.tag.conductor_canonical" = "The conductors of the recording, under their canonical MusicBrainz names."
+"var.tag.conductor_credited" = "The conductors of the recording, as credited on this release."
+"var.tag.conductor_sort" = "The sort names of the conductors of the recording."
+"var.tag.orchestra_canonical" = "The orchestras performing the recording, under their canonical MusicBrainz names."
+"var.tag.orchestra_credited" = "The orchestras performing the recording, as credited on this release."
+"var.tag.orchestra_sort" = "The sort names of the orchestras performing the recording."
+"var.tag.location_canonical" = "The place the recording was made, under its canonical MusicBrainz name."
+"var.tag.location_credited" = "The place the recording was made, as credited on this release."
+"var.tag.movement" = "The movement, rendered from the work hierarchy through the movement template (by default the performed work), with the partial performance suffix where one applies."
+"var.tag.grouping" = "The grouping, rendered from the work hierarchy through the grouping template (by default the topmost work)."
+"var.tag.work" = "The work, rendered from the work hierarchy through the work template (by default every level from the topmost work down to the performed one)."
+"var.tag.movementnumber" = "The position of this track among the tracks of its parent work on this disc."
+"var.tag.movementtotal" = "The number of tracks belonging to that parent work on this disc."
+"var.tag.showmovement" = "Set to 1 whenever a movement was produced, so that players supporting it show the work and movement instead of the track title."
+"var.tag.key" = "The key of the performed work, taken from the nearest level of the hierarchy that names one."
+"var.tag.work_year" = "The year or span in which the work was composed, from the composer relationship dates, followed by the configured suffix."
+"var.tag.recordingdate" = "The dates of the recording sessions, in the configured date style."
+"var.tag.classical" = "The classical detection verdict for the release or track, written as the configured value for classical or for not classical."
+"var.multi" = "Notes: multi-value variable."

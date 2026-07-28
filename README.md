@@ -97,6 +97,13 @@ The policy is evaluated separately for every tag in a destination list. The
 preview shows the generated values before the policy is applied because it does
 not have a loaded file's existing metadata to compare against.
 
+Every setting on the page can be put into a **profile** (Options → Profiles,
+group "Simple Classical"), so a profile can switch a whole tagging style at
+once and not just toggle sections on and off. Settings a profile tracks are tinted on
+the options page, more strongly when the profile actually overrides them. The
+two tables (detection rules, depth overrides) can be put into a profile too, but
+Qt cannot tint a table, so they are not marked.
+
 The individual sections are, in the order they appear:
 
 **Classical detection** — see
@@ -193,6 +200,15 @@ show only the opera.
 **Scripting**: the hierarchy is exported to Picard scripts and file naming
 as `%_sc_l1%`…, `%_sc_top%`, `%_sc_depth%` and `%_sc_partial%`, so anything
 the templates can't express is one `$set()` away in Options → Scripting.
+All of them are offered by the script editor's autocompletion and documented
+in its Variables list, along with every tag the plugin is configured to
+write that Picard does not already know as a variable of its own. With the
+default setting: `ensemble`, `location`, `part`, `work_year`,
+`conductorsort`, `recordingdate`, `artists_sort` and `performer:orchestra`.
+The list follows the options: rename a tag and save, and it is announced
+under the new name straight away, no restart needed. Levels beyond `%_sc_l6%` exist
+but are left out of the completion list rather than filling it with 32
+near-identical entries.
 
 ## Classical-or-not detection
 

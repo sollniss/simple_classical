@@ -13,8 +13,17 @@ from weakref import WeakKeyDictionary
 
 from picard.plugin3.api import (
     OptionsPage,
+    PageOptionConfigs,
     PluginApi,
 )
+
+# Not re-exported through picard.plugin3.api, but both are plain module-level
+# names in Picard.  Announcing the configured tag names needs the plugin's own
+# entries cleared before they are registered again (see
+# _register_script_variables), and needs to know which names Picard already
+# provides itself.
+from picard.extension_points.script_variables import ext_point_script_variables
+from picard.tags import script_variable_tag_names
 from PyQt6 import (
     QtCore,
     QtWidgets,
@@ -150,13 +159,23 @@ def _default_options():
     return defaults
 
 
-def _register_options(config):
+def _register_options(api):
     """Register all options in the plugin's private config section.
 
-    The option type (text/bool) is inferred from the default value."""
+    The option type (text/bool) is inferred from the default value.  Every
+    option the dialog shows is profile-aware and carries the title the
+    profiles UI needs (see _option_titles); the internal schema version and
+    the three options without a widget stay plain, so that no row a user
+    cannot set shows up in the profiles tree."""
+    config = api.plugin_config
     config.register_option("defaults_version", 0)
+    titles = _option_titles(api)
     for name, default in _default_options().items():
-        config.register_option(name, default)
+        title = titles.get(name)
+        if title is None:
+            config.register_option(name, default)
+        else:
+            config.register_option(name, default, title=title, in_profile=True)
 
 
 # Saving the options page persists every option, freezing that release's
@@ -702,6 +721,12 @@ _WORK_INC = "artist-rels+work-rels"
 # follow the data.  This is only a backstop against runaway request chains
 # from absurdly deep hierarchies; cycles are caught separately.
 _MAX_DEPTH = 32
+
+# Levels announced to the script completer.  Every level up to _MAX_DEPTH is
+# exported, but hierarchies deeper than a handful are rare and listing all of
+# them would bury both the completer and the scripting documentation under
+# near-identical entries.  The ones listed say so in their documentation.
+_SCRIPT_VAR_LEVELS = 6
 
 
 def _complete_album_task(api, album, task_id):
@@ -1928,9 +1953,181 @@ _TEMPLATE_HELP = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Option metadata
+# ---------------------------------------------------------------------------
+#
+# Every option the dialog shows is profile-aware, which means Picard needs a
+# human-readable title for it and, to highlight it, the name of the widget
+# that edits it.  Both are derived from the labels the options page already
+# puts on screen, so a title costs no string of its own.
+
+# Section heading per option group.  The people sections reuse the labels the
+# page builds from _PEOPLE_UI; the rest name theirs here.
+_SECTION_LABELS = {
+    key: ("section.%s.label" % key, label)
+    for key, label, _note, _sort, _split, _roles in _PEOPLE_UI
+}
+_SECTION_LABELS.update(
+    {
+        "classical": ("section.classical.label", "Classical detection"),
+        "recdate": ("section.recdate.label", "Recording date"),
+        "work": ("section.work.label", "Work && movement"),
+        "key": ("section.key.label", "Key"),
+        "workyear": ("section.workyear.label", "Composition year"),
+    }
+)
+
+# The role combos share one label with the section they belong to ("Composer:"
+# labels both the Composer section and the composer role rule of the Artist
+# section), so the rules get a title of their own.
+_ROLE_TITLES = {
+    "composer": ("option.role.composer", "Composer role"),
+    "conductor": ("option.role.conductor", "Conductor role"),
+    "orchestra": ("option.role.orchestra", "Orchestra role"),
+}
+
+# Options outside the people sections: (option, section, key, English text).
+# Almost all of them reuse the key the page already puts in front of the
+# widget; only the rows the dialog labels with something other than a caption
+# (the section check box, the two tables, a check box legend) name a new one.
+_OPTION_ROWS = [
+    ("location_area_fallback", "location", "option.location_fallback", "Area fallback"),
+    ("classical_enabled", "classical", "option.enabled", "Enabled"),
+    ("classical_scope", "classical", "classical.scope", "Judge:"),
+    ("classical_rules", "classical", "option.classical_rules", "Detection rules"),
+    ("classical_genres", "classical", "classical.genres", "Genre keywords:"),
+    ("classical_detect_tag", "classical", "classical.detect_tag", "Detect from tag:"),
+    (
+        "classical_detect_value",
+        "classical",
+        "classical.detect_value",
+        "Detect tag value:",
+    ),
+    ("tag_classical", "classical", "classical.write_tag", "Write verdict to:"),
+    ("classical_value", "classical", "classical.value", "Value when classical:"),
+    (
+        "classical_negative_value",
+        "classical",
+        "classical.negative_value",
+        "Value when not classical:",
+    ),
+    ("recdate_enabled", "recdate", "option.enabled", "Enabled"),
+    ("recdate_write_policy", "recdate", "ui.existing_tags", "Existing tags:"),
+    ("tag_recordingdate", "recdate", "ui.write_to", "Write to:"),
+    ("recording_date_mode", "recdate", "ui.date_style", "Date style:"),
+    ("work_enabled", "work", "option.enabled", "Enabled"),
+    ("work_write_policy", "work", "ui.existing_tags", "Existing tags:"),
+    ("tpl_movement", "work", "work.movement_value", "Movement value:"),
+    ("tag_movement", "work", "work.write_movement", "Write movement to:"),
+    ("tpl_grouping", "work", "work.grouping_value", "Grouping value:"),
+    ("tag_grouping", "work", "work.write_grouping", "Write grouping to:"),
+    ("tpl_work", "work", "work.work_value", "Work value:"),
+    ("tag_work", "work", "work.write_work", "Write work to:"),
+    ("part_suffix", "work", "work.part_suffix", "Partial performance suffix:"),
+    (
+        "tag_movementnumber",
+        "work",
+        "work.write_movementnumber",
+        "Write movement number to:",
+    ),
+    (
+        "tag_movementtotal",
+        "work",
+        "work.write_movementtotal",
+        "Write movement total to:",
+    ),
+    (
+        "tag_showmovement",
+        "work",
+        "work.write_showmovement",
+        "Write show movement to:",
+    ),
+    ("depth_overrides", "work", "option.depth_overrides", "Depth overrides"),
+    ("key_enabled", "key", "option.enabled", "Enabled"),
+    ("key_write_policy", "key", "ui.existing_tags", "Existing tags:"),
+    ("tag_key", "key", "ui.write_to", "Write to:"),
+    ("workyear_enabled", "workyear", "option.enabled", "Enabled"),
+    ("workyear_write_policy", "workyear", "ui.existing_tags", "Existing tags:"),
+    ("tag_work_year", "workyear", "ui.write_to", "Write to:"),
+    ("composed_suffix", "workyear", "ui.suffix", "Suffix:"),
+]
+
+
+def _build_option_labels():
+    """Option name -> (section, translation key, English text), for every
+    option the dialog actually shows.
+
+    The has_sort/has_split flags that decide whether _add_people_box builds a
+    widget decide the same thing here, so the three options without one
+    (title_sort, title_split, location_sort) stay out by construction: no
+    widget, nothing to title, nothing a profile could override."""
+    labels = {}
+    for key, _label, _note, has_sort, has_split, has_roles in _PEOPLE_UI:
+        rows = [
+            ("enabled", "option.enabled", "Enabled"),
+            ("write_policy", "ui.existing_tags", "Existing tags:"),
+            ("canonical", "ui.write_canonical", "Write canonical to:"),
+            ("credited", "ui.write_credited", "Write credited to:"),
+        ]
+        if has_sort:
+            rows.append(("sort", "ui.write_sort", "Write sort to:"))
+        if has_split:
+            rows.append(("split", "ui.split", "Split into multiple values"))
+        for suffix, tr_key, text in rows:
+            labels["%s_%s" % (key, suffix)] = (key, tr_key, text)
+        if has_roles:
+            for role in _ROLES:
+                labels["%s_role_%s" % (key, role)] = (key,) + _ROLE_TITLES[role]
+    for option, section, tr_key, text in _OPTION_ROWS:
+        labels[option] = (section, tr_key, text)
+    return labels
+
+
+_OPTION_LABELS = _build_option_labels()
+
+
+def _plain(text):
+    """QGroupBox reads a single '&' as a mnemonic, so section labels escape it
+    as '&&'.  A plain title or a tree row must not."""
+    return text.replace("&&", "&")
+
+
+def _option_titles(api):
+    """Option name -> the title the profiles UI shows for it.
+
+    Composed from the section heading and the row label the options page
+    already shows: 'Composer' + 'Write canonical to:' becomes
+    'Composer: Write canonical to'."""
+    titles = {}
+    for option, (section, tr_key, text) in _OPTION_LABELS.items():
+        heading_key, heading_text = _SECTION_LABELS[section]
+        heading = _plain(api.tr(heading_key, heading_text))
+        titles[option] = "%s: %s" % (heading, api.tr(tr_key, text).rstrip(" :："))
+    return titles
+
+
+# The two tables are QAbstractItemView subclasses, and Picard skips those when
+# highlighting (a stylesheet breaks checkable item rendering).  They stay
+# profile-aware, they just get no widget to mark.
+_UNSTYLED_OPTIONS = frozenset({"classical_rules", "depth_overrides"})
+
+
+def _page_options():
+    """OPTIONS for the options page: the widget Picard marks when a profile
+    tracks or overrides an option.  Every option-bearing widget is named after
+    its option (see SimpleClassicalOptionsPage.__init__), so the mapping is
+    the identity."""
+    options: PageOptionConfigs = {}
+    for option in _OPTION_LABELS:
+        options[option] = {} if option in _UNSTYLED_OPTIONS else {"widgets": [option]}
+    return options
+
+
 class SimpleClassicalOptionsPage(OptionsPage):
     NAME = "simple_classical"
     TITLE = "Simple Classical"
+    OPTIONS: PageOptionConfigs = _page_options()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1999,6 +2196,17 @@ class SimpleClassicalOptionsPage(OptionsPage):
             "work_year",
         )
         self._layout.addStretch()
+
+        # Profile highlighting: Picard looks a tracked option's widget up as
+        # an attribute of the page and then styles it through an object-name
+        # selector, so an option-bearing widget needs both, named after its
+        # option (see OPTIONS).  The two tables are left out - Picard skips
+        # item views, and they are reached through self.rules_table /
+        # self.overrides_table anyway.
+        for widgets in (self._checks, self._texts, self._modes):
+            for option, widget in widgets.items():
+                widget.setObjectName(option)
+                setattr(self, option, widget)
 
         # Recompute the preview whenever an option that affects its
         # generated values changes. Write policies only affect existing file
@@ -2803,22 +3011,9 @@ class SimpleClassicalOptionsPage(OptionsPage):
             setting[option] = combo.currentData()
         setting["depth_overrides"] = self._save_overrides()
         setting["classical_rules"] = self._save_rules()
-
-    def restore_defaults(self):
-        """Show the plugin's defaults in the dialog (nothing is saved until
-        the user saves).  Picard's own implementation only covers options
-        declared through OptionsPage.register_setting, which this page does
-        not use, so without this override the button would merely re-load
-        the stored values."""
-        defaults = _default_options()
-        for option, widget in self._checks.items():
-            widget.setChecked(defaults[option])
-        for option, widget in self._texts.items():
-            widget.setText(defaults[option])
-        for option, combo in self._modes.items():
-            combo.setCurrentIndex(max(combo.findData(defaults[option]), 0))
-        self._load_overrides(defaults["depth_overrides"])
-        self._load_rules(defaults["classical_rules"])
+        # A tag name may have changed; announce the variables under the names
+        # now configured rather than the ones from when the plugin was enabled.
+        _register_script_variables(self.api)
 
 
 # ---------------------------------------------------------------------------
@@ -2826,10 +3021,311 @@ class SimpleClassicalOptionsPage(OptionsPage):
 # ---------------------------------------------------------------------------
 
 
+_PLUGIN_MODULE_PREFIX = "picard.plugins."
+
+# The key ExtensionPoint files this plugin's entries under, derived from the
+# module name exactly the way ExtensionPoint.register derives it.  Outside
+# Picard (a test harness importing the file directly) the name does not match
+# and nothing is cleared, which is the safe way round: entries registered
+# under None are Picard's own, and dropping those would take the application
+# with them.
+_EXT_POINT_KEY = None
+if __name__.startswith(_PLUGIN_MODULE_PREFIX):
+    _EXT_POINT_KEY = __name__[len(_PLUGIN_MODULE_PREFIX) :].split(".")[0]
+
+
+_PEOPLE_FIELDS = ("_canonical", "_credited", "_sort")
+
+
+def _is_tag_target(option):
+    """Options holding a tag list the plugin writes to."""
+    return option.startswith("tag_") or option.endswith(_PEOPLE_FIELDS)
+
+
+# What the value in a tag actually is, in the style of Picard's own variable
+# documentation: the content, not the option that produced it.
+_TAG_VAR_DESCRIPTIONS = {
+    "title_canonical": ("var.tag.title_canonical", "The recording's title."),
+    "title_credited": (
+        "var.tag.title_credited",
+        "The track title as printed on this release.",
+    ),
+    "artist_canonical": (
+        "var.tag.artist_canonical",
+        "The track artists after the role rules are applied (composers are "
+        "removed by default), under their canonical MusicBrainz names.",
+    ),
+    "artist_credited": (
+        "var.tag.artist_credited",
+        "The track artists after the role rules are applied, as credited on "
+        "this release.",
+    ),
+    "artist_sort": (
+        "var.tag.artist_sort",
+        "The sort names of the track artists after the role rules are applied.",
+    ),
+    "albumartist_canonical": (
+        "var.tag.albumartist_canonical",
+        "The release artists after the role rules are applied (composers are "
+        "removed by default), under their canonical MusicBrainz names.",
+    ),
+    "albumartist_credited": (
+        "var.tag.albumartist_credited",
+        "The release artists after the role rules are applied, as credited on "
+        "this release.",
+    ),
+    "albumartist_sort": (
+        "var.tag.albumartist_sort",
+        "The sort names of the release artists after the role rules are "
+        "applied.",
+    ),
+    "artists_canonical": (
+        "var.tag.artists_canonical",
+        "The full release credit including the composer, under their "
+        "canonical MusicBrainz names.",
+    ),
+    "artists_credited": (
+        "var.tag.artists_credited",
+        "The full release credit including the composer, as credited on this "
+        "release.",
+    ),
+    "artists_sort": (
+        "var.tag.artists_sort",
+        "The sort names of the full release credit, including the composer.",
+    ),
+    "composer_canonical": (
+        "var.tag.composer_canonical",
+        "The composers of the performed work, under their canonical "
+        "MusicBrainz names.",
+    ),
+    "composer_credited": (
+        "var.tag.composer_credited",
+        "The composers of the performed work, as credited on this release.",
+    ),
+    "composer_sort": (
+        "var.tag.composer_sort",
+        "The sort names of the composers of the performed work.",
+    ),
+    "conductor_canonical": (
+        "var.tag.conductor_canonical",
+        "The conductors of the recording, under their canonical MusicBrainz "
+        "names.",
+    ),
+    "conductor_credited": (
+        "var.tag.conductor_credited",
+        "The conductors of the recording, as credited on this release.",
+    ),
+    "conductor_sort": (
+        "var.tag.conductor_sort",
+        "The sort names of the conductors of the recording.",
+    ),
+    "orchestra_canonical": (
+        "var.tag.orchestra_canonical",
+        "The orchestras performing the recording, under their canonical "
+        "MusicBrainz names.",
+    ),
+    "orchestra_credited": (
+        "var.tag.orchestra_credited",
+        "The orchestras performing the recording, as credited on this release.",
+    ),
+    "orchestra_sort": (
+        "var.tag.orchestra_sort",
+        "The sort names of the orchestras performing the recording.",
+    ),
+    "location_canonical": (
+        "var.tag.location_canonical",
+        "The place the recording was made, under its canonical MusicBrainz "
+        "name.",
+    ),
+    "location_credited": (
+        "var.tag.location_credited",
+        "The place the recording was made, as credited on this release.",
+    ),
+    "tag_movement": (
+        "var.tag.movement",
+        "The movement, rendered from the work hierarchy through the movement "
+        "template (by default the performed work), with the partial "
+        "performance suffix where one applies.",
+    ),
+    "tag_grouping": (
+        "var.tag.grouping",
+        "The grouping, rendered from the work hierarchy through the grouping "
+        "template (by default the topmost work).",
+    ),
+    "tag_work": (
+        "var.tag.work",
+        "The work, rendered from the work hierarchy through the work template "
+        "(by default every level from the topmost work down to the performed "
+        "one).",
+    ),
+    "tag_movementnumber": (
+        "var.tag.movementnumber",
+        "The position of this track among the tracks of its parent work on "
+        "this disc.",
+    ),
+    "tag_movementtotal": (
+        "var.tag.movementtotal",
+        "The number of tracks belonging to that parent work on this disc.",
+    ),
+    "tag_showmovement": (
+        "var.tag.showmovement",
+        "Set to 1 whenever a movement was produced, so that players "
+        "supporting it show the work and movement instead of the track title.",
+    ),
+    "tag_key": (
+        "var.tag.key",
+        "The key of the performed work, taken from the nearest level of the "
+        "hierarchy that names one.",
+    ),
+    "tag_work_year": (
+        "var.tag.work_year",
+        "The year or span in which the work was composed, from the composer "
+        "relationship dates, followed by the configured suffix.",
+    ),
+    "tag_recordingdate": (
+        "var.tag.recordingdate",
+        "The dates of the recording sessions, in the configured date style.",
+    ),
+    "tag_classical": (
+        "var.tag.classical",
+        "The classical detection verdict for the release or track, written as "
+        "the configured value for classical or for not classical.",
+    ),
+}
+
+
+def _is_multi_value(setting, option):
+    """A people section writes one value per person while 'Split into
+    multiple values' is on and one joined value otherwise; every other
+    section writes a single value."""
+    for suffix in _PEOPLE_FIELDS:
+        if option.endswith(suffix):
+            return bool(setting["%s_split" % option[: -len(suffix)]])
+    return False
+
+
+def _tag_variables(setting):
+    """Configured tag name -> the option that writes it.
+
+    Names Picard already provides (composer, work, movement, ...) are left
+    out: registering one would add a second documentation entry for it and
+    log a duplicate warning.  A target naming a hidden variable is announced
+    the way a script spells it, with '_' rather than '~'."""
+    system = set(script_variable_tag_names())
+    found = {}
+    for option in _OPTION_LABELS:
+        if not _is_tag_target(option):
+            continue
+        for tag in _parse_taglist(setting[option]):
+            name = "_" + tag[1:] if tag.startswith("~") else tag
+            if name not in system and name not in found:
+                found[name] = option
+    return found
+
+
+def _register_script_variables(api):
+    """Announce the variables the plugin writes to the script completer and
+    the scripting documentation.
+
+    Called again whenever the options are saved, so that a tag the user has
+    renamed is announced under its new name without a restart.  The entries
+    have to be cleared first: the extension point appends without checking
+    for a name it already holds, and the scripting documentation lists every
+    entry it holds, oldest description first."""
+    if _EXT_POINT_KEY:
+        ext_point_script_variables.unregister_module(_EXT_POINT_KEY)
+    tr = api.tr
+    api.register_script_variable(
+        "_sc_classical",
+        tr(
+            "var.classical",
+            "Whether the release (or track) was judged classical: 1 or 0. "
+            "Only set while classical detection is enabled.",
+        ),
+    )
+    for signal in _CLASSICAL_SIGNALS:
+        api.register_script_variable(
+            "_sc_sig_" + signal,
+            tr(
+                "var.signal",
+                "Classical-detection signal “{label}”: 1 when it holds, "
+                "0 when it does not.",
+                label=tr("classical.col.%s" % signal, _CLASSICAL_SIGNAL_LABELS[signal]),
+            ),
+        )
+    api.register_script_variable(
+        "_sc_depth",
+        tr(
+            "var.depth",
+            "Number of levels in the performed work's hierarchy; 1 means a "
+            "standalone work.",
+        ),
+    )
+    api.register_script_variable(
+        "_sc_top",
+        tr(
+            "var.top",
+            "The topmost work of the hierarchy, the same value the %top% "
+            "template token renders.",
+        ),
+    )
+    api.register_script_variable(
+        "_sc_partial",
+        tr(
+            "var.partial",
+            "1 when the recording is a partial performance of the work, 0 otherwise.",
+        ),
+    )
+    for level in range(1, _SCRIPT_VAR_LEVELS + 1):
+        api.register_script_variable(
+            "_sc_l%d" % level,
+            tr(
+                "var.level",
+                "Level {n} of the work hierarchy: 1 is the performed work "
+                "itself, higher numbers are its parents up to %_sc_top%. "
+                "%_sc_depth% gives the number of levels a track has, at "
+                "most {max}.",
+                n=level,
+                max=_MAX_DEPTH,
+            ),
+        )
+    setting = api.plugin_config
+    for tag, option in _tag_variables(setting).items():
+        described = _TAG_VAR_DESCRIPTIONS.get(option)
+        if described is None:
+            # A tag target without a description of its own: say which
+            # section it belongs to rather than nothing at all.
+            section, _tr_key, _text = _OPTION_LABELS[option]
+            heading_key, heading_text = _SECTION_LABELS[section]
+            documentation = tr(
+                "var.tag",
+                "Tag Simple Classical is configured to write the “{section}” "
+                "section to.",
+                section=_plain(tr(heading_key, heading_text)),
+            )
+        else:
+            documentation = tr(*described)
+        if _is_multi_value(setting, option):
+            # Picard notes this for its own multi-value variables; the plugin
+            # name it appends itself is a plain line too, so this one is not
+            # marked up either - it renders with or without Markdown.
+            documentation += "\n\n" + tr(
+                "var.multi", "Notes: multi-value variable."
+            )
+        try:
+            api.register_script_variable(tag, documentation)
+        except ValueError:
+            # A tag name is not necessarily a legal variable name; Picard
+            # allows letters, digits, underscores and colons.  The tag is
+            # still written, it just cannot be announced.
+            continue
+
+
 def enable(api: PluginApi) -> None:
     """Called when the plugin is enabled."""
-    _register_options(api.plugin_config)
+    _register_options(api)
     _migrate_options(api.plugin_config)
+    _register_script_variables(api)
     api.register_album_metadata_processor(process_album)
     api.register_track_metadata_processor(process_track)
     api.register_options_page(SimpleClassicalOptionsPage)
